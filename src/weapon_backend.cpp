@@ -6,7 +6,7 @@
 #endif
 
 #include "weapon_backend.h"
-#include "original_bank.h"
+#include "sound_bank.h"
 
 #include <windows.h>
 #include <mmsystem.h>
@@ -25,6 +25,8 @@ namespace {
 constexpr std::uint32_t kQueueCapacity = 1024;
 constexpr std::uint32_t kQueueMask = kQueueCapacity - 1;
 constexpr std::size_t kMaxOriginalSounds = 400;
+constexpr std::size_t kWeaponBankId = 143;
+constexpr std::size_t kBulletHitBankId = 27;
 
 struct Voice {
     IDirectSoundBuffer* buffer{};
@@ -36,19 +38,31 @@ struct Voice {
     bool pendingStart{};
     bool suspended{};
     std::int16_t soundId{-1};
+    float headroomDb{};
     AudioVector worldPosition{};
     float sourceVolumeDb{};
     float rollOffFactor{};
     bool followsCamera{};
     bool isTail{};
     std::uint32_t environmentFrame{};
+    std::uintptr_t minigunSourceKey{};
+    bool looping{};
+    bool minigunTailFading{};
+    std::uint32_t minigunFadeFrame{};
+    bool isBulletHit{};
+};
+
+struct MinigunSource {
+    std::uintptr_t key{};
+    DWORD lastHeartbeat{};
+    AudioJob job{};
 };
 
 HMODULE gModule{};
 HANDLE gThread{};
 HANDLE gWakeEvent{};
 HANDLE gStopEvent{};
-std::array<GunAudioJob, kQueueCapacity> gJobs{};
+std::array<AudioJob, kQueueCapacity> gJobs{};
 std::atomic<std::uint32_t> gWrite{};
 std::atomic<std::uint32_t> gRead{};
 std::atomic<bool> gReady{};
@@ -58,8 +72,16 @@ std::atomic<std::uint32_t> gCameraTransformGeneration{};
 std::atomic<bool> gCanSeeOutside{true};
 std::atomic<std::uint32_t> gEnvironmentFrame{};
 SRWLOCK gOverrideLock = SRWLOCK_INIT;
-std::array<std::string, kMaxOriginalSounds> gOverridePaths{};
-std::array<std::int8_t, kMaxOriginalSounds> gOverrideActions{};
+constexpr auto kRuntimeSoundBankCount =
+    static_cast<std::size_t>(RuntimeSoundBank::Count);
+std::array<
+    std::array<std::string, kMaxOriginalSounds>,
+    kRuntimeSoundBankCount
+> gOverridePaths{};
+std::array<
+    std::array<std::int8_t, kMaxOriginalSounds>,
+    kRuntimeSoundBankCount
+> gOverrideActions{};
 
 std::string GetModuleDirectory() {
     char path[MAX_PATH]{};
@@ -179,17 +201,19 @@ bool EnsureBaseBuffer(
 }
 
 void ApplyPendingOverrides(
-    OriginalWeaponBank& bank,
+    RuntimeSoundBank runtimeBank,
+    OriginalSoundBank& bank,
     std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& baseBuffers
 ) {
+    const auto bankIndex = static_cast<std::size_t>(runtimeBank);
     std::array<std::string, kMaxOriginalSounds> paths{};
     std::array<std::int8_t, kMaxOriginalSounds> actions{};
     AcquireSRWLockExclusive(&gOverrideLock);
     for (std::size_t index = 0; index < kMaxOriginalSounds; ++index) {
-        if (gOverrideActions[index] != 0) {
-            actions[index] = gOverrideActions[index];
-            paths[index] = std::move(gOverridePaths[index]);
-            gOverrideActions[index] = 0;
+        if (gOverrideActions[bankIndex][index] != 0) {
+            actions[index] = gOverrideActions[bankIndex][index];
+            paths[index] = std::move(gOverridePaths[bankIndex][index]);
+            gOverrideActions[bankIndex][index] = 0;
         }
     }
     ReleaseSRWLockExclusive(&gOverrideLock);
@@ -249,7 +273,7 @@ void CleanupVoices(std::vector<Voice>& voices) {
 
 void PlaySample(
     IDirectSound8* directSound,
-    OriginalWeaponBank& bank,
+    OriginalSoundBank& bank,
     std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& baseBuffers,
     std::vector<Voice>& voices,
     std::int16_t soundId,
@@ -261,25 +285,43 @@ void PlaySample(
     const AudioVector& worldPosition,
     float sourceVolumeDb,
     float rollOffFactor,
-    bool isTail
+    bool isTail,
+    std::uintptr_t minigunSourceKey = 0,
+    bool looping = false,
+    bool isBulletHit = false
 ) {
     const auto* sample = bank.Get(soundId);
     if (!sample || sample->pcm.empty() || volumeDb <= -100.0f) {
         return;
     }
 
-    auto& base = baseBuffers[static_cast<std::size_t>(soundId)];
-    if (!EnsureBaseBuffer(directSound, *sample, base)) {
-        return;
-    }
-
     IDirectSoundBuffer* voice{};
-    if (FAILED(directSound->DuplicateSoundBuffer(base, &voice))) {
-        base->Release();
-        base = nullptr;
-        if (!CreateBaseBuffer(directSound, *sample, &base) ||
-            FAILED(directSound->DuplicateSoundBuffer(base, &voice))) {
+    if (looping && sample->loopStartSample >= 0) {
+        OriginalPcmSample loopSample = *sample;
+        const auto loopByte = static_cast<std::size_t>(
+            sample->loopStartSample
+        ) * 2;
+        if (loopByte < sample->pcm.size()) {
+            loopSample.pcm.assign(
+                sample->pcm.begin() + loopByte,
+                sample->pcm.end()
+            );
+        }
+        if (!CreateBaseBuffer(directSound, loopSample, &voice)) {
             return;
+        }
+    } else {
+        auto& base = baseBuffers[static_cast<std::size_t>(soundId)];
+        if (!EnsureBaseBuffer(directSound, *sample, base)) {
+            return;
+        }
+        if (FAILED(directSound->DuplicateSoundBuffer(base, &voice))) {
+            base->Release();
+            base = nullptr;
+            if (!CreateBaseBuffer(directSound, *sample, &base) ||
+                FAILED(directSound->DuplicateSoundBuffer(base, &voice))) {
+                return;
+            }
         }
     }
     if (!voice) {
@@ -307,7 +349,10 @@ void PlaySample(
     voice->SetCurrentPosition(0);
     voice->SetFrequency(frequency);
     voice->SetVolume(std::clamp<LONG>(volume, DSBVOLUME_MIN, DSBVOLUME_MAX));
-    spatialBuffer->SetMode(DS3DMODE_NORMAL, DS3D_IMMEDIATE);
+    spatialBuffer->SetMode(
+        forcedFront ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
+        DS3D_IMMEDIATE
+    );
     spatialBuffer->SetMinDistance(1.0f, DS3D_IMMEDIATE);
     spatialBuffer->SetMaxDistance(10000.0f, DS3D_IMMEDIATE);
     spatialBuffer->SetPosition(
@@ -327,12 +372,18 @@ void PlaySample(
         true,
         false,
         soundId,
+        static_cast<float>(sample->headroom) / 100.0f,
         worldPosition,
         sourceVolumeDb,
         rollOffFactor,
         !forcedFront && rollOffFactor > 0.0f,
         isTail,
-        gEnvironmentFrame.load(std::memory_order_acquire)
+        gEnvironmentFrame.load(std::memory_order_acquire),
+        minigunSourceKey,
+        looping,
+        false,
+        0,
+        isBulletHit
     });
 }
 
@@ -342,7 +393,11 @@ void StartPendingVoices(std::vector<Voice>& voices) {
             continue;
         }
         voice.pendingStart = false;
-        if (FAILED(voice.buffer->Play(0, 0, 0))) {
+        if (FAILED(voice.buffer->Play(
+                0,
+                0,
+                voice.looping ? DSBPLAY_LOOPING : 0
+            ))) {
             if (voice.spatialBuffer) {
                 voice.spatialBuffer->Release();
                 voice.spatialBuffer = nullptr;
@@ -373,7 +428,11 @@ void ResumeVoices(std::vector<Voice>& voices) {
             continue;
         }
         voice.suspended = false;
-        if (FAILED(voice.buffer->Play(0, 0, 0))) {
+        if (FAILED(voice.buffer->Play(
+                0,
+                0,
+                voice.looping ? DSBPLAY_LOOPING : 0
+            ))) {
             if (voice.spatialBuffer) {
                 voice.spatialBuffer->Release();
                 voice.spatialBuffer = nullptr;
@@ -501,7 +560,7 @@ float GetDirectionalMikeAttenuation(const AudioVector& direction) {
 }
 
 float GetHeadroomDb(
-    OriginalWeaponBank& bank,
+    OriginalSoundBank& bank,
     std::int16_t soundId
 ) {
     const auto* sample = bank.Get(soundId);
@@ -509,7 +568,7 @@ float GetHeadroomDb(
 }
 
 float CalculateWorldVolume(
-    OriginalWeaponBank& bank,
+    OriginalSoundBank& bank,
     std::int16_t soundId,
     float sourceVolumeDb,
     float rollOffFactor,
@@ -527,7 +586,7 @@ float CalculateWorldVolume(
 }
 
 float CalculateFrontVolume(
-    OriginalWeaponBank& bank,
+    OriginalSoundBank& bank,
     std::int16_t soundId,
     float sourceVolumeDb
 ) {
@@ -574,10 +633,7 @@ AudioVector TransformWorldPosition(
     };
 }
 
-void UpdateVoicePositions(
-    OriginalWeaponBank& bank,
-    std::vector<Voice>& voices
-) {
+void UpdateVoicePositions(std::vector<Voice>& voices) {
     AudioCameraTransform transform{};
     if (!ReadCameraTransform(transform)) {
         return;
@@ -594,13 +650,13 @@ void UpdateVoicePositions(
             relative.z,
             DS3D_IMMEDIATE
         );
-        voice.mixVolumeDb = CalculateWorldVolume(
-            bank,
-            voice.soundId,
-            voice.sourceVolumeDb,
-            voice.rollOffFactor,
-            relative
-        );
+        voice.mixVolumeDb =
+            voice.sourceVolumeDb -
+            voice.headroomDb +
+            GetDirectionalMikeAttenuation(relative) +
+            GetDistanceAttenuation(
+                Magnitude(relative) / voice.rollOffFactor
+            );
     }
 }
 
@@ -624,12 +680,14 @@ void UpdateVoiceEnvironment(std::vector<Voice>& voices) {
     }
 }
 
-void ProcessJob(
+void ProcessGunLayers(
     IDirectSound8* directSound,
-    OriginalWeaponBank& bank,
+    OriginalSoundBank& bank,
     std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& baseBuffers,
     std::vector<Voice>& voices,
-    const GunAudioJob& job
+    const AudioJob& job,
+    std::uintptr_t minigunSourceKey = 0,
+    bool looping = false
 ) {
     const AudioVector frontLeft{-1.0f, 0.0f, 0.0f};
     const AudioVector frontRight{1.0f, 0.0f, 0.0f};
@@ -657,7 +715,9 @@ void ProcessJob(
         job.worldPosition,
         originalBaseVolume,
         job.baseRollOffFactor * (2.0f / 3.0f),
-        false
+        false,
+        minigunSourceKey,
+        looping
     );
     PlaySample(
         directSound,
@@ -679,7 +739,9 @@ void ProcessJob(
         job.worldPosition,
         originalBaseVolume,
         job.baseRollOffFactor * 0.9f,
-        false
+        false,
+        minigunSourceKey,
+        looping
     );
 
     auto worldMainVolume = originalBaseVolume;
@@ -725,7 +787,9 @@ void ProcessJob(
             {},
             0.0f,
             0.0f,
-            false
+            false,
+            minigunSourceKey,
+            looping
         );
         PlaySample(
             directSound,
@@ -747,7 +811,9 @@ void ProcessJob(
             job.worldPosition,
             worldMainVolume,
             mainRollOff,
-            false
+            false,
+            minigunSourceKey,
+            looping
         );
     };
     if (job.mainLeftSoundId != -1) {
@@ -786,7 +852,9 @@ void ProcessJob(
             {},
             0.0f,
             0.0f,
-            true
+            true,
+            minigunSourceKey,
+            looping
         );
         PlaySample(
             directSound,
@@ -802,9 +870,231 @@ void ProcessJob(
             {},
             0.0f,
             0.0f,
-            true
+            true,
+            minigunSourceKey,
+            looping
         );
     }
+}
+
+void StopMinigunVoices(
+    std::vector<Voice>& voices,
+    std::uintptr_t sourceKey,
+    bool fadeTail
+) {
+    const auto frame = gEnvironmentFrame.load(std::memory_order_acquire);
+    for (auto& voice : voices) {
+        if (voice.minigunSourceKey != sourceKey || !voice.buffer) {
+            continue;
+        }
+        if (fadeTail && voice.isTail) {
+            voice.minigunTailFading = true;
+            voice.minigunFadeFrame = frame;
+        } else {
+            voice.buffer->Stop();
+        }
+    }
+}
+
+void ProcessMinigunJob(
+    IDirectSound8* directSound,
+    OriginalSoundBank& bank,
+    std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& baseBuffers,
+    std::vector<Voice>& voices,
+    std::vector<MinigunSource>& sources,
+    const AudioJob& job
+) {
+    auto source = std::find_if(
+        sources.begin(),
+        sources.end(),
+        [&](const MinigunSource& value) {
+            return value.key == job.sourceKey;
+        }
+    );
+    const auto now = GetTickCount();
+    if (source != sources.end() &&
+        source->job.minigunMode == job.minigunMode) {
+        source->lastHeartbeat = now;
+        source->job = job;
+        for (auto& voice : voices) {
+            if (voice.minigunSourceKey == job.sourceKey) {
+                voice.worldPosition = job.worldPosition;
+            }
+        }
+        return;
+    }
+
+    if (source != sources.end()) {
+        StopMinigunVoices(voices, job.sourceKey, true);
+        source->lastHeartbeat = now;
+        source->job = job;
+    } else {
+        sources.push_back({job.sourceKey, now, job});
+    }
+
+    if (job.minigunMode == MinigunAudioMode::Fire) {
+        ProcessGunLayers(
+            directSound,
+            bank,
+            baseBuffers,
+            voices,
+            job,
+            job.sourceKey,
+            true
+        );
+        return;
+    }
+
+    constexpr std::int16_t kMinigunSpinSoundId = 14;
+    const auto sourceVolume =
+        job.defaultVolumeDb + job.volumeOffsetDb;
+    constexpr float kSpinRollOff = 2.0f / 3.0f;
+    PlaySample(
+        directSound,
+        bank,
+        baseBuffers,
+        voices,
+        kMinigunSpinSoundId,
+        1.0f,
+        job.relativePosition,
+        CalculateWorldVolume(
+            bank,
+            kMinigunSpinSoundId,
+            sourceVolume,
+            kSpinRollOff,
+            job.relativePosition
+        ) + job.effectsGainDb,
+        false,
+        job.effectsGainDb,
+        job.worldPosition,
+        sourceVolume,
+        kSpinRollOff,
+        false,
+        job.sourceKey,
+        true
+    );
+}
+
+void UpdateMinigunSources(
+    IDirectSound8* directSound,
+    OriginalSoundBank& bank,
+    std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& baseBuffers,
+    std::vector<Voice>& voices,
+    std::vector<MinigunSource>& sources
+) {
+    constexpr DWORD kStopDelayMs = 300;
+    constexpr std::int16_t kMinigunStopSoundId = 63;
+    const auto now = GetTickCount();
+    for (auto source = sources.begin(); source != sources.end();) {
+        if (now - source->lastHeartbeat <= kStopDelayMs) {
+            ++source;
+            continue;
+        }
+
+        StopMinigunVoices(voices, source->key, true);
+        const auto& job = source->job;
+        const auto speed = job.isAircraftWeapon ? 1.8f : 1.0f;
+        const auto rollOff =
+            (job.isAircraftWeapon ? 0.7937f : 1.0f) * (2.0f / 3.0f);
+        PlaySample(
+            directSound,
+            bank,
+            baseBuffers,
+            voices,
+            kMinigunStopSoundId,
+            speed,
+            job.relativePosition,
+            CalculateWorldVolume(
+                bank,
+                kMinigunStopSoundId,
+                job.minigunStopVolumeDb,
+                rollOff,
+                job.relativePosition
+            ) + job.effectsGainDb,
+            false,
+            job.effectsGainDb,
+            job.worldPosition,
+            job.minigunStopVolumeDb,
+            rollOff,
+            false
+        );
+        source = sources.erase(source);
+    }
+
+    const auto frame = gEnvironmentFrame.load(std::memory_order_acquire);
+    for (auto& voice : voices) {
+        if (!voice.minigunTailFading || !voice.buffer) {
+            continue;
+        }
+        const auto elapsedFrames = frame - voice.minigunFadeFrame;
+        if (elapsedFrames == 0) {
+            continue;
+        }
+        voice.minigunFadeFrame = frame;
+        voice.mixVolumeDb -= 1.5f * static_cast<float>(elapsedFrames);
+        if (voice.mixVolumeDb <= -30.0f) {
+            voice.buffer->Stop();
+        }
+    }
+}
+
+void ProcessBulletHit(
+    IDirectSound8* directSound,
+    OriginalSoundBank& bank,
+    std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& baseBuffers,
+    std::vector<Voice>& voices,
+    const AudioJob& job
+) {
+    const auto sourceVolume =
+        job.defaultVolumeDb + job.volumeOffsetDb;
+    const auto listenerVolume = CalculateWorldVolume(
+        bank,
+        job.drySoundId,
+        sourceVolume,
+        job.baseRollOffFactor,
+        job.relativePosition
+    ) + job.effectsGainDb;
+    constexpr std::size_t kMaximumBulletHitVoices = 32;
+    std::size_t activeBulletHits{};
+    auto quietest = voices.end();
+    for (auto voice = voices.begin(); voice != voices.end(); ++voice) {
+        if (!voice->isBulletHit || !voice->buffer) {
+            continue;
+        }
+        ++activeBulletHits;
+        if (quietest == voices.end() ||
+            voice->mixVolumeDb < quietest->mixVolumeDb) {
+            quietest = voice;
+        }
+    }
+    if (activeBulletHits >= kMaximumBulletHitVoices) {
+        if (quietest == voices.end() ||
+            listenerVolume <= quietest->mixVolumeDb) {
+            return;
+        }
+        quietest->buffer->Stop();
+        quietest->isBulletHit = false;
+    }
+
+    PlaySample(
+        directSound,
+        bank,
+        baseBuffers,
+        voices,
+        job.drySoundId,
+        job.baseSpeed,
+        job.relativePosition,
+        listenerVolume,
+        false,
+        job.effectsGainDb,
+        job.worldPosition,
+        sourceVolume,
+        job.baseRollOffFactor,
+        false,
+        0,
+        false,
+        true
+    );
 }
 
 bool InitialiseListener(
@@ -851,9 +1141,12 @@ bool InitialiseListener(
 }
 
 DWORD WINAPI BackendThread(void*) {
-    OriginalWeaponBank bank;
+    OriginalSoundBank weaponBank;
+    OriginalSoundBank bulletHitBank;
     std::string error;
-    if (!bank.Load(GetGameDirectory(), error)) {
+    const auto gameDirectory = GetGameDirectory();
+    if (!weaponBank.Load(gameDirectory, kWeaponBankId, error) ||
+        !bulletHitBank.Load(gameDirectory, kBulletHitBankId, error)) {
         return 1;
     }
 
@@ -881,9 +1174,12 @@ DWORD WINAPI BackendThread(void*) {
         return 4;
     }
 
-    std::array<IDirectSoundBuffer*, kMaxOriginalSounds> baseBuffers{};
+    std::array<IDirectSoundBuffer*, kMaxOriginalSounds> weaponBaseBuffers{};
+    std::array<IDirectSoundBuffer*, kMaxOriginalSounds> bulletHitBaseBuffers{};
     std::vector<Voice> voices;
+    std::vector<MinigunSource> minigunSources;
     voices.reserve(128);
+    minigunSources.reserve(16);
     gReady.store(true, std::memory_order_release);
 
     HANDLE waits[] = {gStopEvent, gWakeEvent};
@@ -891,12 +1187,22 @@ DWORD WINAPI BackendThread(void*) {
     bool replacementWasEnabled =
         gReplaceOriginal.load(std::memory_order_acquire);
     while (WaitForMultipleObjects(2, waits, FALSE, 10) != WAIT_OBJECT_0) {
-        ApplyPendingOverrides(bank, baseBuffers);
+        ApplyPendingOverrides(
+            RuntimeSoundBank::Weapons,
+            weaponBank,
+            weaponBaseBuffers
+        );
+        ApplyPendingOverrides(
+            RuntimeSoundBank::BulletHits,
+            bulletHitBank,
+            bulletHitBaseBuffers
+        );
         const bool replacementIsEnabled =
             gReplaceOriginal.load(std::memory_order_acquire);
         if (replacementIsEnabled != replacementWasEnabled) {
             if (!replacementIsEnabled) {
                 StopAndReleaseVoices(voices);
+                minigunSources.clear();
             }
             replacementWasEnabled = replacementIsEnabled;
         }
@@ -923,18 +1229,45 @@ DWORD WINAPI BackendThread(void*) {
             wasPaused = false;
         }
         while (read != write) {
-            ProcessJob(
-                directSound,
-                bank,
-                baseBuffers,
-                voices,
-                gJobs[read]
-            );
+            const auto& job = gJobs[read];
+            if (job.type == AudioJobType::BulletHit) {
+                ProcessBulletHit(
+                    directSound,
+                    bulletHitBank,
+                    bulletHitBaseBuffers,
+                    voices,
+                    job
+                );
+            } else if (job.minigunMode == MinigunAudioMode::None) {
+                ProcessGunLayers(
+                    directSound,
+                    weaponBank,
+                    weaponBaseBuffers,
+                    voices,
+                    job
+                );
+            } else {
+                ProcessMinigunJob(
+                    directSound,
+                    weaponBank,
+                    weaponBaseBuffers,
+                    voices,
+                    minigunSources,
+                    job
+                );
+            }
             read = (read + 1) & kQueueMask;
         }
         gRead.store(read, std::memory_order_release);
+        UpdateMinigunSources(
+            directSound,
+            weaponBank,
+            weaponBaseBuffers,
+            voices,
+            minigunSources
+        );
         CleanupVoices(voices);
-        UpdateVoicePositions(bank, voices);
+        UpdateVoicePositions(voices);
         UpdateVoiceEnvironment(voices);
         RebalanceVoiceMixer(voices);
         StartPendingVoices(voices);
@@ -942,7 +1275,13 @@ DWORD WINAPI BackendThread(void*) {
 
     gReady.store(false, std::memory_order_release);
     StopAndReleaseVoices(voices);
-    for (auto*& buffer : baseBuffers) {
+    for (auto*& buffer : weaponBaseBuffers) {
+        if (buffer) {
+            buffer->Release();
+            buffer = nullptr;
+        }
+    }
+    for (auto*& buffer : bulletHitBaseBuffers) {
         if (buffer) {
             buffer->Release();
             buffer = nullptr;
@@ -972,7 +1311,7 @@ void WeaponBackendStop() {
     }
 }
 
-bool WeaponBackendEnqueue(const GunAudioJob& job) {
+bool WeaponBackendEnqueue(const AudioJob& job) {
     if (!gReady.load(std::memory_order_acquire)) {
         return false;
     }
@@ -1004,17 +1343,21 @@ bool WeaponBackendIsEnabled() {
 }
 
 bool WeaponBackendSetSampleOverride(
+    RuntimeSoundBank bank,
     std::int16_t soundId,
     const char* path
 ) {
-    if (soundId < 0 ||
+    const auto bankIndex = static_cast<std::size_t>(bank);
+    if (bankIndex >= kRuntimeSoundBankCount ||
+        soundId < 0 ||
         static_cast<std::size_t>(soundId) >= kMaxOriginalSounds ||
         !path || !*path) {
         return false;
     }
+    const auto soundIndex = static_cast<std::size_t>(soundId);
     AcquireSRWLockExclusive(&gOverrideLock);
-    gOverridePaths[static_cast<std::size_t>(soundId)] = path;
-    gOverrideActions[static_cast<std::size_t>(soundId)] = 1;
+    gOverridePaths[bankIndex][soundIndex] = path;
+    gOverrideActions[bankIndex][soundIndex] = 1;
     ReleaseSRWLockExclusive(&gOverrideLock);
     if (gWakeEvent) {
         SetEvent(gWakeEvent);
@@ -1022,14 +1365,20 @@ bool WeaponBackendSetSampleOverride(
     return true;
 }
 
-bool WeaponBackendClearSampleOverride(std::int16_t soundId) {
-    if (soundId < 0 ||
+bool WeaponBackendClearSampleOverride(
+    RuntimeSoundBank bank,
+    std::int16_t soundId
+) {
+    const auto bankIndex = static_cast<std::size_t>(bank);
+    if (bankIndex >= kRuntimeSoundBankCount ||
+        soundId < 0 ||
         static_cast<std::size_t>(soundId) >= kMaxOriginalSounds) {
         return false;
     }
+    const auto soundIndex = static_cast<std::size_t>(soundId);
     AcquireSRWLockExclusive(&gOverrideLock);
-    gOverridePaths[static_cast<std::size_t>(soundId)].clear();
-    gOverrideActions[static_cast<std::size_t>(soundId)] = -1;
+    gOverridePaths[bankIndex][soundIndex].clear();
+    gOverrideActions[bankIndex][soundIndex] = -1;
     ReleaseSRWLockExclusive(&gOverrideLock);
     if (gWakeEvent) {
         SetEvent(gWakeEvent);

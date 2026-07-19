@@ -9,11 +9,16 @@ struct OriginalPcmSample {
     std::vector<std::uint8_t> pcm;
     std::uint32_t sampleRate{};
     std::int16_t headroom{};
+    std::int32_t loopStartSample{-1};
 };
 
-class OriginalWeaponBank {
+class OriginalSoundBank {
 public:
-    bool Load(const std::string& gameDirectory, std::string& error);
+    bool Load(
+        const std::string& gameDirectory,
+        std::size_t bankId,
+        std::string& error
+    );
     bool ApplyWaveOverride(
         std::int16_t soundId,
         const std::string& path,

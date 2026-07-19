@@ -15,7 +15,25 @@ struct AudioCameraTransform {
     AudioVector zAxis{};
 };
 
-struct GunAudioJob {
+enum class MinigunAudioMode : std::uint8_t {
+    None,
+    Fire,
+    Spin
+};
+
+enum class AudioJobType : std::uint8_t {
+    Gunshot,
+    BulletHit
+};
+
+enum class RuntimeSoundBank : std::uint8_t {
+    Weapons,
+    BulletHits,
+    Count
+};
+
+struct AudioJob {
+    AudioJobType type{AudioJobType::Gunshot};
     std::int16_t drySoundId{-1};
     std::int16_t subSoundId{-1};
     std::int16_t mainLeftSoundId{-1};
@@ -32,19 +50,26 @@ struct GunAudioJob {
     float tailRightSpeed{1.1892101f};
     float effectsGainDb{};
     bool isAircraftWeapon{};
+    MinigunAudioMode minigunMode{MinigunAudioMode::None};
+    std::uintptr_t sourceKey{};
+    float minigunStopVolumeDb{};
 };
 
 bool WeaponBackendStart(void* module);
 void WeaponBackendStop();
-bool WeaponBackendEnqueue(const GunAudioJob& job);
+bool WeaponBackendEnqueue(const AudioJob& job);
 bool WeaponBackendShouldReplaceOriginal();
 void WeaponBackendSetEnabled(bool enabled);
 bool WeaponBackendIsEnabled();
 bool WeaponBackendSetSampleOverride(
+    RuntimeSoundBank bank,
     std::int16_t soundId,
     const char* path
 );
-bool WeaponBackendClearSampleOverride(std::int16_t soundId);
+bool WeaponBackendClearSampleOverride(
+    RuntimeSoundBank bank,
+    std::int16_t soundId
+);
 void WeaponBackendUpdateCameraTransform(
     const AudioCameraTransform& transform
 );

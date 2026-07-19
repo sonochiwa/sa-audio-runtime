@@ -1,4 +1,4 @@
-#include "original_bank.h"
+#include "sound_bank.h"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +8,6 @@
 
 namespace {
 
-constexpr std::size_t kWeaponBankId = 143;
 constexpr std::size_t kBankLookupEntrySize = 12;
 constexpr std::size_t kMaxSounds = 400;
 constexpr std::size_t kSoundInfoSize = 12;
@@ -51,8 +50,9 @@ bool ReadExact(
 
 } // namespace
 
-bool OriginalWeaponBank::Load(
+bool OriginalSoundBank::Load(
     const std::string& gameDirectory,
+    std::size_t bankId,
     std::string& error
 ) {
     mSampleCount = 0;
@@ -69,11 +69,11 @@ bool OriginalWeaponBank::Load(
 
     std::array<std::uint8_t, kBankLookupEntrySize> entry{};
     lookup.seekg(
-        static_cast<std::streamoff>(kWeaponBankId * kBankLookupEntrySize),
+        static_cast<std::streamoff>(bankId * kBankLookupEntrySize),
         std::ios::beg
     );
     if (!ReadExact(lookup, entry.data(), entry.size())) {
-        error = "cannot read weapon bank lookup entry";
+        error = "cannot read sound bank lookup entry";
         return false;
     }
 
@@ -81,7 +81,7 @@ bool OriginalWeaponBank::Load(
     const auto bankOffset = ReadU32(entry.data() + 4);
     const auto bankDataSize = ReadU32(entry.data() + 8);
     if (pakId != 1 || bankDataSize == 0) {
-        error = "weapon bank is not in the original GENRL pak";
+        error = "sound bank is not in the original GENRL pak";
         return false;
     }
 
@@ -95,25 +95,28 @@ bool OriginalWeaponBank::Load(
     std::array<std::uint8_t, kBankHeaderSize> header{};
     genrl.seekg(static_cast<std::streamoff>(bankOffset), std::ios::beg);
     if (!ReadExact(genrl, header.data(), header.size())) {
-        error = "cannot read GENRL weapon bank header";
+        error = "cannot read GENRL sound bank header";
         return false;
     }
 
     const auto numSounds = ReadU16(header.data());
     if (numSounds == 0 || numSounds > kMaxSounds) {
-        error = "invalid weapon bank sound count";
+        error = "invalid sound bank sound count";
         return false;
     }
 
     std::vector<std::uint8_t> bankData(bankDataSize);
     if (!ReadExact(genrl, bankData.data(), bankData.size())) {
-        error = "cannot read GENRL weapon bank PCM data";
+        error = "cannot read GENRL sound bank PCM data";
         return false;
     }
 
     for (std::size_t id = 0; id < numSounds; ++id) {
         const auto* info = header.data() + 4 + id * kSoundInfoSize;
         const auto offset = ReadU32(info);
+        const auto loopStartSample = static_cast<std::int32_t>(
+            ReadU32(info + 4)
+        );
         const auto nextOffset = id + 1 < numSounds
             ? ReadU32(info + kSoundInfoSize)
             : bankDataSize;
@@ -122,13 +125,14 @@ bool OriginalWeaponBank::Load(
 
         if (offset > nextOffset || nextOffset > bankData.size() ||
             sampleRate < 100 || ((nextOffset - offset) & 1u) != 0) {
-            error = "invalid PCM metadata in GENRL weapon bank";
+            error = "invalid PCM metadata in GENRL sound bank";
             return false;
         }
 
         auto& sample = mSamples[id];
         sample.sampleRate = sampleRate;
         sample.headroom = headroom;
+        sample.loopStartSample = loopStartSample;
         sample.pcm.assign(
             bankData.begin() + offset,
             bankData.begin() + nextOffset
@@ -140,13 +144,13 @@ bool OriginalWeaponBank::Load(
     return true;
 }
 
-bool OriginalWeaponBank::ApplyWaveOverride(
+bool OriginalSoundBank::ApplyWaveOverride(
     std::int16_t soundId,
     const std::string& path,
     std::string& error
 ) {
     if (soundId < 0 || static_cast<std::size_t>(soundId) >= mSampleCount) {
-        error = "override sound id is outside the weapon bank";
+        error = "override sound id is outside the sound bank";
         return false;
     }
 
@@ -216,10 +220,17 @@ bool OriginalWeaponBank::ApplyWaveOverride(
     // WAV overrides inherit the original bank headroom.
     sample.headroom =
         mOriginalSamples[static_cast<std::size_t>(soundId)].headroom;
+    const auto originalLoop =
+        mOriginalSamples[static_cast<std::size_t>(soundId)].loopStartSample;
+    sample.loopStartSample =
+        originalLoop >= 0 &&
+        static_cast<std::size_t>(originalLoop) < sample.pcm.size() / 2
+            ? originalLoop
+            : (originalLoop >= 0 ? 0 : -1);
     return true;
 }
 
-bool OriginalWeaponBank::RestoreOriginal(std::int16_t soundId) {
+bool OriginalSoundBank::RestoreOriginal(std::int16_t soundId) {
     if (soundId < 0 || static_cast<std::size_t>(soundId) >= mSampleCount) {
         return false;
     }
@@ -228,7 +239,7 @@ bool OriginalWeaponBank::RestoreOriginal(std::int16_t soundId) {
     return true;
 }
 
-const OriginalPcmSample* OriginalWeaponBank::Get(std::int16_t soundId) const {
+const OriginalPcmSample* OriginalSoundBank::Get(std::int16_t soundId) const {
     if (soundId < 0 || static_cast<std::size_t>(soundId) >= mSampleCount) {
         return nullptr;
     }

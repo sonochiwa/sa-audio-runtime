@@ -36,7 +36,7 @@ void CreateDefaultConfiguration(bool enabled) {
     const int length = std::snprintf(
         text,
         sizeof(text),
-        "# SA Audio Runtime v1.0.0\r\n"
+        "# SA Audio Runtime v1.1.0\r\n"
         "# Created by sonochiwa\r\n"
         "# Source code: https://github.com/sonochiwa/sa-audio-runtime\r\n"
         "# Default toggle hotkey: Alt + Y\r\n"

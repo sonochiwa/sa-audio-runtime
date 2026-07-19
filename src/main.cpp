@@ -19,21 +19,39 @@
 namespace {
 
 constexpr std::uintptr_t kPlayGunSoundsAddress = 0x503CE0;
+constexpr std::uintptr_t kPlayMinigunFireSoundsAddress = 0x5047C0;
+constexpr std::uintptr_t kPlayBulletHitSoundAddress = 0x4DB7C0;
 constexpr std::uintptr_t kAudioEngineServiceAddress = 0x507750;
 constexpr std::uintptr_t kGameSignatureAddress = 0x401000;
 constexpr std::uintptr_t kGetPositionRelativeToCameraAddress = 0x4D8340;
 constexpr std::uintptr_t kVectorRelativeToCameraAddress = 0x4D80B0;
 constexpr std::uintptr_t kCanSeeOutsideAddress = 0x53C4A0;
 constexpr std::uintptr_t kAddMessageJumpAddress = 0x69F1E0;
+constexpr std::uintptr_t kRandomIntAddress = 0x4D9C10;
 constexpr std::uintptr_t kRandomFloatAddress = 0x4D9C50;
 constexpr std::uintptr_t kResolveProbabilityAddress = 0x4D9C80;
 constexpr std::uintptr_t kEventVolumesPointerAddress = 0xBD00F8;
 constexpr std::uintptr_t kAudioHardwareAddress = 0xB5F8B8;
+constexpr std::uintptr_t kGameTimeMsAddress = 0xB7CB84;
+constexpr std::uintptr_t kSurfaceInfosAddress = 0xB79538;
+constexpr std::uintptr_t kIsAudioConcreteAddress = 0x55EA30;
+constexpr std::uintptr_t kIsAudioGravelAddress = 0x55EA90;
+constexpr std::uintptr_t kIsAudioWoodAddress = 0x55EAB0;
+constexpr std::uintptr_t kIsAudioWaterAddress = 0x55EAD0;
+constexpr std::uintptr_t kIsAudioMetalAddress = 0x55EAF0;
+constexpr std::uintptr_t kIsAudioTileAddress = 0x55EB30;
 constexpr std::size_t kEffectMasterScaleOffset = 0x414;
 constexpr std::size_t kEffectsFaderScaleOffset = 0x41C;
 constexpr std::size_t kNonStreamFaderScaleOffset = 0x420;
+constexpr std::int32_t kWeaponFireEvent = 145;
 constexpr std::int32_t kWeaponFirePlaneEvent = 149;
+constexpr std::int32_t kWeaponFireMinigunAmmoEvent = 150;
+constexpr std::int32_t kWeaponFireMinigunNoAmmoEvent = 151;
 constexpr std::int32_t kWeaponFireMinigunPlaneEvent = 152;
+constexpr std::int32_t kWeaponFireMinigunStopEvent = 153;
+constexpr std::int32_t kBulletHitEvent = 117;
+constexpr std::int32_t kPedSurface = 62;
+constexpr std::int32_t kCollisionSurfaceCount = 195;
 constexpr std::int16_t kMinigunDrySoundId = 15;
 constexpr std::int16_t kMinigunSubSoundId = 16;
 constexpr std::int16_t kMinigunMainLeftSoundId = 11;
@@ -43,6 +61,14 @@ constexpr std::uint32_t kGame10UsCompactSignature = 0x53EC8B55;
 constexpr std::uint32_t kGame10UsHoodlumSignature = 0x16197BE9;
 constexpr std::uint8_t kPlayGunSoundsPrologue[] = {
     0x83, 0xEC, 0x28, 0x53, 0x55, 0x56, 0x57, 0x6A, 0x05, 0x8B, 0xF1
+};
+constexpr std::uint8_t kPlayMinigunFireSoundsPrologue[] = {
+    0x8B, 0x44, 0x24, 0x08, 0x3D, 0x96, 0x00, 0x00,
+    0x00, 0x53, 0x56, 0x57, 0x8B, 0xF1
+};
+constexpr std::uint8_t kPlayBulletHitSoundPrologue[] = {
+    0x6A, 0xFF, 0x68, 0x98, 0xBE, 0x83, 0x00,
+    0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50
 };
 constexpr std::uint8_t kAudioEngineServicePrologue[] = {
     0x56, 0x57, 0x8B, 0xF1, 0xE9
@@ -62,6 +88,16 @@ using PlayGunSoundsFn = void(__thiscall*)(
 );
 
 using ServiceFn = void(__thiscall*)(void* self);
+using PlayMinigunFireSoundsFn =
+    void(__thiscall*)(void* self, void* entity, std::int32_t audioEventId);
+using PlayBulletHitSoundFn = void(__thiscall*)(
+    void* self,
+    std::int32_t surface,
+    const AudioVector* position,
+    float angle
+);
+using SurfaceFlagFn = bool(__thiscall*)(void* self, std::int32_t surface);
+using RandomIntFn = std::int32_t(__cdecl*)(std::int32_t, std::int32_t);
 using GetPositionRelativeToCameraFn = void(__cdecl*)(AudioVector*, void*);
 using VectorRelativeToCameraFn =
     void(__cdecl*)(AudioVector*, const AudioVector*);
@@ -73,6 +109,8 @@ using AddMessageJumpFn =
 
 HMODULE gModule{};
 PlayGunSoundsFn gOriginalPlayGunSounds{};
+PlayMinigunFireSoundsFn gOriginalPlayMinigunFireSounds{};
+PlayBulletHitSoundFn gOriginalPlayBulletHitSound{};
 ServiceFn gOriginalAudioEngineService{};
 bool gHotkeyWasDown{};
 
@@ -145,6 +183,78 @@ void PublishCameraTransform() {
     });
 }
 
+AudioJob BuildGunAudioJob(
+    void* self,
+    void* entity,
+    std::int16_t emptySfxId,
+    std::int16_t farSfxId,
+    std::int16_t highPitchSfxId,
+    std::int16_t lowPitchSfxId,
+    std::int16_t echoSfxId,
+    std::int32_t audioEventId,
+    float volumeChange,
+    float speed1,
+    float speed2
+) {
+    AudioJob job{};
+    job.drySoundId = emptySfxId;
+    job.subSoundId = farSfxId;
+    job.mainLeftSoundId = highPitchSfxId;
+    job.mainRightSoundId = lowPitchSfxId;
+    job.tailSoundId = echoSfxId;
+    job.volumeOffsetDb = volumeChange;
+
+    auto* eventVolumes = *reinterpret_cast<std::int8_t* const volatile*>(
+        kEventVolumesPointerAddress
+    );
+    if (eventVolumes) {
+        if (audioEventId >= 0 && audioEventId < 45401) {
+            job.defaultVolumeDb =
+                static_cast<float>(eventVolumes[audioEventId]);
+        }
+        job.minigunStopVolumeDb =
+            static_cast<float>(eventVolumes[kWeaponFireMinigunStopEvent]);
+    }
+
+    reinterpret_cast<GetPositionRelativeToCameraFn>(
+        kGetPositionRelativeToCameraAddress
+    )(&job.relativePosition, entity);
+    job.worldPosition = ReadPlaceablePosition(entity);
+
+    job.baseRollOffFactor = 1.0f;
+    job.baseSpeed = speed1;
+    job.isAircraftWeapon =
+        audioEventId == kWeaponFirePlaneEvent ||
+        audioEventId == kWeaponFireMinigunPlaneEvent;
+    if (audioEventId == kWeaponFirePlaneEvent) {
+        auto* planeFrequencyIndex =
+            static_cast<std::uint8_t*>(self) + 0x7E;
+        *planeFrequencyIndex =
+            static_cast<std::uint8_t>((*planeFrequencyIndex + 1) % 2);
+        constexpr float variations[] = {1.08f, 1.0f};
+        job.baseRollOffFactor = 1.6f;
+        job.baseSpeed =
+            variations[*planeFrequencyIndex] * speed1 * 0.7937f;
+    } else if (audioEventId == kWeaponFireMinigunPlaneEvent) {
+        job.baseRollOffFactor = 1.8f;
+        job.baseSpeed = speed1 * 0.7937f;
+    }
+
+    const auto randomPitch = reinterpret_cast<RandomFloatFn>(
+        kRandomFloatAddress
+    )(-0.02f, 0.02f);
+    job.mainSpeed = (randomPitch + 1.0f) * job.baseSpeed;
+    job.tailLeftSpeed = speed2;
+    job.tailRightSpeed = speed2 * 1.1892101f;
+    if (reinterpret_cast<ResolveProbabilityFn>(
+            kResolveProbabilityAddress
+        )(0.5f)) {
+        std::swap(job.tailLeftSpeed, job.tailRightSpeed);
+    }
+    job.effectsGainDb = ReadEffectsGainDb();
+    return job;
+}
+
 void __fastcall HookPlayGunSounds(
     void* self,
     void*,
@@ -165,25 +275,7 @@ void __fastcall HookPlayGunSounds(
         highPitchSfxId == kMinigunMainLeftSoundId &&
         lowPitchSfxId == kMinigunMainRightSoundId &&
         echoSfxId == kMinigunTailSoundId;
-    if (isMinigun) {
-        gOriginalPlayGunSounds(
-            self,
-            entity,
-            emptySfxId,
-            farSfxId,
-            highPitchSfxId,
-            lowPitchSfxId,
-            echoSfxId,
-            audioEventId,
-            volumeChange,
-            speed1,
-            speed2
-        );
-        return;
-    }
-
     constexpr std::size_t kLastGunFireTimeOffset = 0x98;
-    constexpr std::uintptr_t kGameTimeMsAddress = 0xB7CB84;
     auto* lastFireTime = reinterpret_cast<std::uint32_t*>(
         static_cast<std::uint8_t*>(self) + kLastGunFireTimeOffset
     );
@@ -198,57 +290,23 @@ void __fastcall HookPlayGunSounds(
         }
 
         *lastFireTime = gameTimeMs;
-        GunAudioJob job{};
-        job.drySoundId = emptySfxId;
-        job.subSoundId = farSfxId;
-        job.mainLeftSoundId = highPitchSfxId;
-        job.mainRightSoundId = lowPitchSfxId;
-        job.tailSoundId = echoSfxId;
-        job.volumeOffsetDb = volumeChange;
-
-        auto* eventVolumes = *reinterpret_cast<std::int8_t* const volatile*>(
-            kEventVolumesPointerAddress
+        auto job = BuildGunAudioJob(
+            self,
+            entity,
+            emptySfxId,
+            farSfxId,
+            highPitchSfxId,
+            lowPitchSfxId,
+            echoSfxId,
+            audioEventId,
+            volumeChange,
+            speed1,
+            speed2
         );
-        if (eventVolumes && audioEventId >= 0 && audioEventId < 45401) {
-            job.defaultVolumeDb = static_cast<float>(eventVolumes[audioEventId]);
+        if (isMinigun) {
+            job.minigunMode = MinigunAudioMode::Fire;
+            job.sourceKey = reinterpret_cast<std::uintptr_t>(self);
         }
-
-        reinterpret_cast<GetPositionRelativeToCameraFn>(
-            kGetPositionRelativeToCameraAddress
-        )(&job.relativePosition, entity);
-        job.worldPosition = ReadPlaceablePosition(entity);
-
-        job.baseRollOffFactor = 1.0f;
-        job.baseSpeed = speed1;
-        job.isAircraftWeapon =
-            audioEventId == kWeaponFirePlaneEvent ||
-            audioEventId == kWeaponFireMinigunPlaneEvent;
-        if (audioEventId == kWeaponFirePlaneEvent) {
-            auto* planeFrequencyIndex =
-                static_cast<std::uint8_t*>(self) + 0x7E;
-            *planeFrequencyIndex =
-                static_cast<std::uint8_t>((*planeFrequencyIndex + 1) % 2);
-            constexpr float variations[] = {1.08f, 1.0f};
-            job.baseRollOffFactor = 1.6f;
-            job.baseSpeed =
-                variations[*planeFrequencyIndex] * speed1 * 0.7937f;
-        } else if (audioEventId == kWeaponFireMinigunPlaneEvent) {
-            job.baseRollOffFactor = 1.8f;
-            job.baseSpeed = speed1 * 0.7937f;
-        }
-
-        const auto randomPitch = reinterpret_cast<RandomFloatFn>(
-            kRandomFloatAddress
-        )(-0.02f, 0.02f);
-        job.mainSpeed = (randomPitch + 1.0f) * job.baseSpeed;
-        job.tailLeftSpeed = speed2;
-        job.tailRightSpeed = speed2 * 1.1892101f;
-        if (reinterpret_cast<ResolveProbabilityFn>(
-                kResolveProbabilityAddress
-            )(0.5f)) {
-            std::swap(job.tailLeftSpeed, job.tailRightSpeed);
-        }
-        job.effectsGainDb = ReadEffectsGainDb();
 
         if (!WeaponBackendEnqueue(job)) {
             *lastFireTime = lastFireTimeBefore;
@@ -280,6 +338,183 @@ void __fastcall HookPlayGunSounds(
             speed1,
             speed2
         );
+    }
+}
+
+void __fastcall HookPlayMinigunFireSounds(
+    void* self,
+    void*,
+    void* entity,
+    std::int32_t audioEventId
+) {
+    if (!WeaponBackendShouldReplaceOriginal()) {
+        gOriginalPlayMinigunFireSounds(self, entity, audioEventId);
+        return;
+    }
+
+    MinigunAudioMode mode{};
+    std::int32_t normalizedEvent{};
+    switch (audioEventId) {
+    case kWeaponFireEvent:
+    case kWeaponFireMinigunAmmoEvent:
+        mode = MinigunAudioMode::Fire;
+        normalizedEvent = kWeaponFireMinigunAmmoEvent;
+        break;
+    case kWeaponFirePlaneEvent:
+        mode = MinigunAudioMode::Fire;
+        normalizedEvent = kWeaponFireMinigunPlaneEvent;
+        break;
+    case kWeaponFireMinigunNoAmmoEvent:
+        mode = MinigunAudioMode::Spin;
+        normalizedEvent = kWeaponFireMinigunNoAmmoEvent;
+        break;
+    default:
+        gOriginalPlayMinigunFireSounds(self, entity, audioEventId);
+        return;
+    }
+
+    constexpr std::size_t kMinigunStateOffset = 0x7F;
+    constexpr std::size_t kLastMinigunUpdateTimeOffset = 0x90;
+    constexpr std::uint32_t kMinigunUpdateIntervalMs = 100;
+    auto* bytes = static_cast<std::uint8_t*>(self);
+    auto* state = bytes + kMinigunStateOffset;
+    auto* lastUpdateTime = reinterpret_cast<std::uint32_t*>(
+        bytes + kLastMinigunUpdateTimeOffset
+    );
+    const auto desiredState = static_cast<std::uint8_t>(
+        mode == MinigunAudioMode::Fire ? 1 : 0
+    );
+    const auto gameTimeMs =
+        *reinterpret_cast<const volatile std::uint32_t*>(kGameTimeMsAddress);
+    if (*state == desiredState &&
+        gameTimeMs < *lastUpdateTime + kMinigunUpdateIntervalMs) {
+        return;
+    }
+    const auto previousState = *state;
+    const auto previousUpdateTime = *lastUpdateTime;
+    *state = desiredState;
+    *lastUpdateTime = gameTimeMs;
+
+    const bool firing = mode == MinigunAudioMode::Fire;
+    auto job = BuildGunAudioJob(
+        self,
+        entity,
+        firing ? kMinigunDrySoundId : -1,
+        firing ? kMinigunSubSoundId : -1,
+        firing ? kMinigunMainLeftSoundId : -1,
+        firing ? kMinigunMainRightSoundId : -1,
+        firing ? kMinigunTailSoundId : -1,
+        normalizedEvent,
+        0.0f,
+        1.0f,
+        1.0f
+    );
+    job.minigunMode = mode;
+    job.sourceKey = reinterpret_cast<std::uintptr_t>(self);
+    if (!WeaponBackendEnqueue(job)) {
+        *state = previousState;
+        *lastUpdateTime = previousUpdateTime;
+        gOriginalPlayMinigunFireSounds(self, entity, audioEventId);
+    }
+}
+
+bool HasSurfaceFlag(std::uintptr_t address, std::int32_t surface) {
+    return reinterpret_cast<SurfaceFlagFn>(address)(
+        reinterpret_cast<void*>(kSurfaceInfosAddress),
+        surface
+    );
+}
+
+void __fastcall HookPlayBulletHitSound(
+    void* self,
+    void*,
+    std::int32_t surface,
+    const AudioVector* position,
+    float angle
+) {
+    if (!WeaponBackendShouldReplaceOriginal() ||
+        !position ||
+        surface < 0 ||
+        surface >= kCollisionSurfaceCount) {
+        gOriginalPlayBulletHitSound(self, surface, position, angle);
+        return;
+    }
+
+    std::int32_t minimumSoundId{};
+    std::int32_t maximumSoundId{};
+    float volumeOffsetDb{};
+    float rollOffFactor = 1.5f;
+    if (surface == kPedSurface) {
+        minimumSoundId = 7;
+        maximumSoundId = 9;
+    } else if (HasSurfaceFlag(kIsAudioWaterAddress, surface)) {
+        minimumSoundId = 16;
+        maximumSoundId = 18;
+        volumeOffsetDb = 6.0f;
+        rollOffFactor = 2.0f;
+    } else if (HasSurfaceFlag(kIsAudioWoodAddress, surface)) {
+        minimumSoundId = 19;
+        maximumSoundId = 21;
+    } else if (HasSurfaceFlag(kIsAudioMetalAddress, surface)) {
+        if (reinterpret_cast<ResolveProbabilityFn>(
+                kResolveProbabilityAddress
+            )((90.0f - angle) / 180.0f)) {
+            minimumSoundId = 10;
+            maximumSoundId = 12;
+        } else {
+            minimumSoundId = 4;
+            maximumSoundId = 6;
+        }
+    } else if (
+        HasSurfaceFlag(kIsAudioConcreteAddress, surface) ||
+        HasSurfaceFlag(kIsAudioGravelAddress, surface) ||
+        HasSurfaceFlag(kIsAudioTileAddress, surface)
+    ) {
+        minimumSoundId = 13;
+        maximumSoundId = 15;
+    } else {
+        minimumSoundId = 1;
+        maximumSoundId = 3;
+    }
+
+    constexpr std::size_t kLastBulletHitSoundOffset = 0x202;
+    auto* lastSoundId = reinterpret_cast<std::int16_t*>(
+        static_cast<std::uint8_t*>(self) + kLastBulletHitSoundOffset
+    );
+    std::int32_t soundId{};
+    do {
+        soundId = reinterpret_cast<RandomIntFn>(kRandomIntAddress)(
+            minimumSoundId,
+            maximumSoundId
+        );
+    } while (soundId == *lastSoundId);
+
+    AudioJob job{};
+    job.type = AudioJobType::BulletHit;
+    job.drySoundId = static_cast<std::int16_t>(soundId);
+    job.worldPosition = *position;
+    job.relativePosition = PositionRelativeToCamera(*position);
+    job.volumeOffsetDb = volumeOffsetDb;
+    job.baseRollOffFactor = rollOffFactor;
+    job.baseSpeed =
+        1.0f +
+        reinterpret_cast<RandomFloatFn>(kRandomFloatAddress)(
+            -0.02f,
+            0.02f
+        );
+    auto* eventVolumes = *reinterpret_cast<std::int8_t* const volatile*>(
+        kEventVolumesPointerAddress
+    );
+    if (eventVolumes) {
+        job.defaultVolumeDb =
+            static_cast<float>(eventVolumes[kBulletHitEvent]);
+    }
+    job.effectsGainDb = ReadEffectsGainDb();
+
+    if (WeaponBackendEnqueue(job)) {
+        *lastSoundId = static_cast<std::int16_t>(soundId);
+    } else {
+        gOriginalPlayBulletHitSound(self, surface, position, angle);
     }
 }
 
@@ -361,6 +596,16 @@ bool InstallHooks() {
             sizeof(kPlayGunSoundsPrologue)
         ) != 0 ||
         std::memcmp(
+            reinterpret_cast<const void*>(kPlayMinigunFireSoundsAddress),
+            kPlayMinigunFireSoundsPrologue,
+            sizeof(kPlayMinigunFireSoundsPrologue)
+        ) != 0 ||
+        std::memcmp(
+            reinterpret_cast<const void*>(kPlayBulletHitSoundAddress),
+            kPlayBulletHitSoundPrologue,
+            sizeof(kPlayBulletHitSoundPrologue)
+        ) != 0 ||
+        std::memcmp(
             reinterpret_cast<const void*>(kAudioEngineServiceAddress),
             kAudioEngineServicePrologue,
             sizeof(kAudioEngineServicePrologue)
@@ -384,6 +629,22 @@ bool InstallHooks() {
             reinterpret_cast<void*>(kAudioEngineServiceAddress),
             &HookAudioEngineService,
             reinterpret_cast<void**>(&gOriginalAudioEngineService)
+        ) != MH_OK) {
+        return false;
+    }
+
+    if (MH_CreateHook(
+            reinterpret_cast<void*>(kPlayMinigunFireSoundsAddress),
+            &HookPlayMinigunFireSounds,
+            reinterpret_cast<void**>(&gOriginalPlayMinigunFireSounds)
+        ) != MH_OK) {
+        return false;
+    }
+
+    if (MH_CreateHook(
+            reinterpret_cast<void*>(kPlayBulletHitSoundAddress),
+            &HookPlayBulletHitSound,
+            reinterpret_cast<void**>(&gOriginalPlayBulletHitSound)
         ) != MH_OK) {
         return false;
     }
@@ -432,17 +693,21 @@ DWORD WINAPI WorkerThread(void*) {
 
 extern "C" __declspec(dllexport) void __cdecl
 AudioRuntimeModLoaderSample(
+    std::int32_t bankId,
     std::int32_t soundId,
     const char* path,
     std::int32_t installed
 ) {
+    const auto bank = static_cast<RuntimeSoundBank>(bankId);
     if (installed) {
         WeaponBackendSetSampleOverride(
+            bank,
             static_cast<std::int16_t>(soundId),
             path
         );
     } else {
         WeaponBackendClearSampleOverride(
+            bank,
             static_cast<std::int16_t>(soundId)
         );
     }

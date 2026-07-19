@@ -1,13 +1,13 @@
 # Roadmap
 
-SA Audio Runtime 1.0.0 implements gunshot rendering only. Future modules will
-be added only when profiling shows a measurable main-thread cost and their
-playback can be reproduced without breaking compatibility.
+SA Audio Runtime 1.1.0 implements weapon-shot and bullet-impact rendering.
+Future modules will be added only when profiling shows a measurable main-thread
+cost and their playback can be reproduced without breaking compatibility.
 
 | Priority | Audio family | Status |
 | --- | --- | --- |
-| 1 | Gunshots | Available in 1.0.0 |
-| 2 | Bullet impacts and weapon mechanics | Profiling candidate |
+| 1 | Gunshots and bullet impacts | Available in 1.1.0 |
+| 2 | Remaining weapon mechanics | Profiling candidate |
 | 3 | Vehicle engines and drivetrain | Profiling candidate |
 | 4 | Vehicle tires, sirens, collisions and damage | Planned |
 | 5 | World ambience and persistent environmental voices | Planned |

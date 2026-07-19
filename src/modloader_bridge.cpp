@@ -85,13 +85,31 @@ struct modloader_plugin_t {
 
 namespace {
 
-using SampleCallback = void(__cdecl*)(std::int32_t, const char*, std::int32_t);
-constexpr char kPluginVersion[] = "1.0.0";
+using SampleCallback = void(__cdecl*)(
+    std::int32_t,
+    std::int32_t,
+    const char*,
+    std::int32_t
+);
+constexpr char kPluginVersion[] = "1.1.0";
 constexpr int kWeaponLocalBank = 137;
+constexpr int kBulletHitLocalBank = 21;
+constexpr std::size_t kRuntimeBankCount = 2;
 constexpr std::size_t kMaxSounds = 400;
 modloader_t* gLoader{};
-std::array<std::string, kMaxSounds> gPaths{};
-std::array<bool, kMaxSounds> gInstalled{};
+std::array<
+    std::array<std::string, kMaxSounds>,
+    kRuntimeBankCount
+> gPaths{};
+std::array<
+    std::array<bool, kMaxSounds>,
+    kRuntimeBankCount
+> gInstalled{};
+
+struct SoundReference {
+    int bank{-1};
+    int sound{-1};
+};
 
 SampleCallback FindBackend() {
     const auto module = GetModuleHandleA("AudioRuntime.asi");
@@ -115,9 +133,9 @@ SampleCallback FindBackend() {
     return callback;
 }
 
-int GetWeaponSoundId(const modloader_file_t* file) {
+SoundReference GetSoundReference(const modloader_file_t* file) {
     if (!file || !file->buffer) {
-        return -1;
+        return {};
     }
     std::string path(file->buffer);
     for (auto& character : path) {
@@ -139,42 +157,55 @@ int GetWeaponSoundId(const modloader_file_t* file) {
             &bank,
             &sound
         ) != 2 ||
-        bank != kWeaponLocalBank ||
+        (bank != kWeaponLocalBank && bank != kBulletHitLocalBank) ||
         sound < 1 ||
         sound > static_cast<int>(kMaxSounds)) {
-        return -1;
+        return {};
     }
-    // ModLoader WAV names are one-based; CAE sound IDs are zero-based.
-    return sound - 1;
+    const auto runtimeBank =
+        bank == kWeaponLocalBank
+            ? 0
+            : (bank == kBulletHitLocalBank ? 1 : -1);
+    if (runtimeBank < 0) {
+        return {};
+    }
+    return {runtimeBank, sound - 1};
 }
 
-void Deliver(int soundId) {
+void Deliver(const SoundReference& reference) {
     const auto callback = FindBackend();
-    if (!callback || soundId < 0 ||
-        soundId >= static_cast<int>(kMaxSounds)) {
+    if (!callback ||
+        reference.bank < 0 ||
+        reference.bank >= static_cast<int>(kRuntimeBankCount) ||
+        reference.sound < 0 ||
+        reference.sound >= static_cast<int>(kMaxSounds)) {
         return;
     }
+    const auto bankIndex = static_cast<std::size_t>(reference.bank);
+    const auto soundIndex = static_cast<std::size_t>(reference.sound);
     callback(
-        soundId,
-        gPaths[static_cast<std::size_t>(soundId)].c_str(),
-        gInstalled[static_cast<std::size_t>(soundId)] ? 1 : 0
+        reference.bank,
+        reference.sound,
+        gPaths[bankIndex][soundIndex].c_str(),
+        gInstalled[bankIndex][soundIndex] ? 1 : 0
     );
 }
 
 int StoreFile(const modloader_file_t* file, bool installed) {
-    const auto soundId = GetWeaponSoundId(file);
-    if (soundId < 0) {
+    const auto reference = GetSoundReference(file);
+    if (reference.bank < 0 || reference.sound < 0) {
         return 0;
     }
-    const auto index = static_cast<std::size_t>(soundId);
-    gInstalled[index] = installed;
+    const auto bankIndex = static_cast<std::size_t>(reference.bank);
+    const auto soundIndex = static_cast<std::size_t>(reference.sound);
+    gInstalled[bankIndex][soundIndex] = installed;
     if (installed && gLoader && gLoader->gamepath) {
-        gPaths[index] = gLoader->gamepath;
-        gPaths[index] += file->buffer;
+        gPaths[bankIndex][soundIndex] = gLoader->gamepath;
+        gPaths[bankIndex][soundIndex] += file->buffer;
     } else {
-        gPaths[index].clear();
+        gPaths[bankIndex][soundIndex].clear();
     }
-    Deliver(soundId);
+    Deliver(reference);
     return 0;
 }
 
@@ -199,7 +230,8 @@ int __cdecl GetBehaviour(
     modloader_plugin_t*,
     modloader_file_t* file
 ) {
-    return GetWeaponSoundId(file) >= 0 ? 2 : 0;
+    const auto reference = GetSoundReference(file);
+    return reference.bank >= 0 && reference.sound >= 0 ? 2 : 0;
 }
 
 int __cdecl InstallFile(
@@ -227,9 +259,14 @@ void __cdecl Update(modloader_plugin_t*) {
     if (!FindBackend()) {
         return;
     }
-    for (std::size_t index = 0; index < kMaxSounds; ++index) {
-        if (gInstalled[index]) {
-            Deliver(static_cast<int>(index));
+    for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
+        for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
+            if (gInstalled[bank][sound]) {
+                Deliver({
+                    static_cast<int>(bank),
+                    static_cast<int>(sound)
+                });
+            }
         }
     }
 }
@@ -271,9 +308,14 @@ extern "C" __declspec(dllexport) void GetPluginData(
 
 extern "C" __declspec(dllexport) void
 AudioRuntimeReplayModLoaderSamples() {
-    for (std::size_t index = 0; index < kMaxSounds; ++index) {
-        if (gInstalled[index]) {
-            Deliver(static_cast<int>(index));
+    for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
+        for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
+            if (gInstalled[bank][sound]) {
+                Deliver({
+                    static_cast<int>(bank),
+                    static_cast<int>(sound)
+                });
+            }
         }
     }
 }

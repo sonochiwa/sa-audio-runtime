@@ -98,7 +98,7 @@
   <ItemGroup>
     <ClCompile Include="audio_config.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="original_bank.cpp" />
+    <ClCompile Include="sound_bank.cpp" />
     <ClCompile Include="weapon_backend.cpp" />
     <ClCompile Include="..\vendor\minhook\src\buffer.c">
       <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
@@ -116,7 +116,7 @@
 
   <ItemGroup>
     <ClInclude Include="audio_config.h" />
-    <ClInclude Include="original_bank.h" />
+    <ClInclude Include="sound_bank.h" />
     <ClInclude Include="weapon_backend.h" />
     <None Include="..\CHANGELOG.md" />
     <None Include="..\Config\AudioRuntime.ini" />
