@@ -3,6 +3,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -91,6 +92,7 @@ using SampleCallback = void(__cdecl*)(
     const char*,
     std::int32_t
 );
+using SourcesCallback = void(__cdecl*)(const char*, const char*);
 constexpr char kPluginVersion[] = "1.1.0";
 constexpr int kWeaponLocalBank = 137;
 constexpr int kBulletHitLocalBank = 21;
@@ -105,14 +107,22 @@ std::array<
     std::array<bool, kMaxSounds>,
     kRuntimeBankCount
 > gInstalled{};
+std::string gArchivePath;
+std::string gLookupPath;
+bool gArchiveInstalled{};
+bool gLookupInstalled{};
 
 struct SoundReference {
     int bank{-1};
     int sound{-1};
 };
 
+HMODULE FindBackendModule() {
+    return GetModuleHandleA("AudioRuntime.asi");
+}
+
 SampleCallback FindBackend() {
-    const auto module = GetModuleHandleA("AudioRuntime.asi");
+    const auto module = FindBackendModule();
     if (!module) {
         return nullptr;
     }
@@ -133,7 +143,23 @@ SampleCallback FindBackend() {
     return callback;
 }
 
-SoundReference GetSoundReference(const modloader_file_t* file) {
+SourcesCallback FindSourcesBackend() {
+    const auto module = FindBackendModule();
+    if (!module) {
+        return nullptr;
+    }
+    auto callback = reinterpret_cast<SourcesCallback>(
+        GetProcAddress(module, "AudioRuntimeModLoaderSources")
+    );
+    if (!callback) {
+        callback = reinterpret_cast<SourcesCallback>(
+            GetProcAddress(module, "_AudioRuntimeModLoaderSources")
+        );
+    }
+    return callback;
+}
+
+std::string NormalisePath(const modloader_file_t* file) {
     if (!file || !file->buffer) {
         return {};
     }
@@ -145,18 +171,44 @@ SoundReference GetSoundReference(const modloader_file_t* file) {
             character = static_cast<char>(character - 'A' + 'a');
         }
     }
+    return path;
+}
+
+SoundReference GetSoundReference(const modloader_file_t* file) {
+    if (!file || !file->buffer) {
+        return {};
+    }
+    const auto path = NormalisePath(file);
     int bank{-1};
     int sound{-1};
-    const auto marker = path.rfind("\\genrl\\bank_");
-    const char* target = marker == std::string::npos
-        ? path.c_str()
-        : path.c_str() + marker + 1;
+    int consumed{};
+    auto marker = path.rfind("\\genrl\\bank_");
+    const char* target{};
+    if (marker != std::string::npos) {
+        target = path.c_str() + marker + 1;
+    } else if (path.rfind("genrl\\bank_", 0) == 0) {
+        target = path.c_str();
+    } else {
+        const auto relativeOffset = std::min<std::size_t>(
+            file->pos_filedir,
+            path.size()
+        );
+        const auto* relative = path.c_str() + relativeOffset;
+        if (std::strncmp(relative, "bank_", 5) != 0) {
+            return {};
+        }
+        target = relative;
+    }
+    const char* format = std::strncmp(target, "genrl\\", 6) == 0
+        ? "genrl\\bank_%d\\sound_%d.wav%n"
+        : "bank_%d\\sound_%d.wav%n";
     if (std::sscanf(
             target,
-            "genrl\\bank_%d\\sound_%d.wav",
+            format,
             &bank,
-            &sound
-        ) != 2 ||
+            &sound,
+            &consumed
+        ) != 2 || target[consumed] != '\0' ||
         (bank != kWeaponLocalBank && bank != kBulletHitLocalBank) ||
         sound < 1 ||
         sound > static_cast<int>(kMaxSounds)) {
@@ -170,6 +222,37 @@ SoundReference GetSoundReference(const modloader_file_t* file) {
         return {};
     }
     return {runtimeBank, sound - 1};
+}
+
+enum class SourceFile {
+    None,
+    Archive,
+    Lookup
+};
+
+SourceFile GetSourceFile(const modloader_file_t* file) {
+    const auto path = NormalisePath(file);
+    if (path.empty()) {
+        return SourceFile::None;
+    }
+    const auto slash = path.find_last_of('\\');
+    const auto name = path.substr(
+        slash == std::string::npos ? 0 : slash + 1
+    );
+    if (name == "genrl") {
+        return SourceFile::Archive;
+    }
+    if (name == "banklkup.dat") {
+        return SourceFile::Lookup;
+    }
+    return SourceFile::None;
+}
+
+std::string GetFullPath(const modloader_file_t* file) {
+    if (!file || !file->buffer || !gLoader || !gLoader->gamepath) {
+        return {};
+    }
+    return std::string(gLoader->gamepath) + file->buffer;
 }
 
 void Deliver(const SoundReference& reference) {
@@ -191,7 +274,30 @@ void Deliver(const SoundReference& reference) {
     );
 }
 
+void DeliverSources() {
+    const auto callback = FindSourcesBackend();
+    if (!callback) {
+        return;
+    }
+    callback(
+        gArchiveInstalled ? gArchivePath.c_str() : "",
+        gLookupInstalled ? gLookupPath.c_str() : ""
+    );
+}
+
 int StoreFile(const modloader_file_t* file, bool installed) {
+    const auto source = GetSourceFile(file);
+    if (source != SourceFile::None) {
+        auto& path = source == SourceFile::Archive
+            ? gArchivePath
+            : gLookupPath;
+        auto& active = source == SourceFile::Archive
+            ? gArchiveInstalled
+            : gLookupInstalled;
+        active = installed;
+        path = installed ? GetFullPath(file) : std::string{};
+        return 0;
+    }
     const auto reference = GetSoundReference(file);
     if (reference.bank < 0 || reference.sound < 0) {
         return 0;
@@ -200,8 +306,7 @@ int StoreFile(const modloader_file_t* file, bool installed) {
     const auto soundIndex = static_cast<std::size_t>(reference.sound);
     gInstalled[bankIndex][soundIndex] = installed;
     if (installed && gLoader && gLoader->gamepath) {
-        gPaths[bankIndex][soundIndex] = gLoader->gamepath;
-        gPaths[bankIndex][soundIndex] += file->buffer;
+        gPaths[bankIndex][soundIndex] = GetFullPath(file);
     } else {
         gPaths[bankIndex][soundIndex].clear();
     }
@@ -231,7 +336,10 @@ int __cdecl GetBehaviour(
     modloader_file_t* file
 ) {
     const auto reference = GetSoundReference(file);
-    return reference.bank >= 0 && reference.sound >= 0 ? 2 : 0;
+    return (reference.bank >= 0 && reference.sound >= 0) ||
+           GetSourceFile(file) != SourceFile::None
+        ? 2
+        : 0;
 }
 
 int __cdecl InstallFile(
@@ -256,9 +364,10 @@ int __cdecl UninstallFile(
 }
 
 void __cdecl Update(modloader_plugin_t*) {
-    if (!FindBackend()) {
+    if (!FindBackendModule()) {
         return;
     }
+    DeliverSources();
     for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
         for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
             if (gInstalled[bank][sound]) {
@@ -271,7 +380,7 @@ void __cdecl Update(modloader_plugin_t*) {
     }
 }
 
-const char* gExtensions[] = {"wav"};
+const char* gExtensions[] = {"wav", "dat", ""};
 
 } // namespace
 
@@ -292,7 +401,7 @@ extern "C" __declspec(dllexport) void GetPluginData(
     plugin->author = "sonochiwa";
     plugin->version = kPluginVersion;
     plugin->extable = gExtensions;
-    plugin->extable_len = 1;
+    plugin->extable_len = 3;
     // Must run before gta3.std.bank (priority 50).
     plugin->priority = 1;
     plugin->GetAuthor = &GetAuthor;
@@ -308,6 +417,7 @@ extern "C" __declspec(dllexport) void GetPluginData(
 
 extern "C" __declspec(dllexport) void
 AudioRuntimeReplayModLoaderSamples() {
+    DeliverSources();
     for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
         for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
             if (gInstalled[bank][sound]) {

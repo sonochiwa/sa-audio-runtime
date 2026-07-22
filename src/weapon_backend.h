@@ -70,6 +70,10 @@ bool WeaponBackendClearSampleOverride(
     RuntimeSoundBank bank,
     std::int16_t soundId
 );
+void WeaponBackendSetArchiveOverride(
+    const char* archivePath,
+    const char* lookupPath
+);
 void WeaponBackendUpdateCameraTransform(
     const AudioCameraTransform& transform
 );

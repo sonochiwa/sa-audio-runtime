@@ -82,6 +82,9 @@ std::array<
     std::array<std::int8_t, kMaxOriginalSounds>,
     kRuntimeSoundBankCount
 > gOverrideActions{};
+std::string gArchiveOverridePath;
+std::string gLookupOverridePath;
+bool gBankSourcesDirty{};
 
 std::string GetModuleDirectory() {
     char path[MAX_PATH]{};
@@ -240,6 +243,44 @@ void ApplyPendingOverrides(
             baseBuffers[index] = nullptr;
         }
     }
+}
+
+void ApplyCurrentOverrides(
+    RuntimeSoundBank runtimeBank,
+    OriginalSoundBank& bank
+) {
+    const auto bankIndex = static_cast<std::size_t>(runtimeBank);
+    std::array<std::string, kMaxOriginalSounds> paths{};
+    AcquireSRWLockShared(&gOverrideLock);
+    paths = gOverridePaths[bankIndex];
+    ReleaseSRWLockShared(&gOverrideLock);
+
+    for (std::size_t index = 0; index < paths.size(); ++index) {
+        if (paths[index].empty()) {
+            continue;
+        }
+        std::string error;
+        bank.ApplyWaveOverride(
+            static_cast<std::int16_t>(index),
+            paths[index],
+            error
+        );
+    }
+}
+
+bool TakeBankSourceUpdate(
+    std::string& archivePath,
+    std::string& lookupPath
+) {
+    AcquireSRWLockExclusive(&gOverrideLock);
+    const bool changed = gBankSourcesDirty;
+    if (changed) {
+        archivePath = gArchiveOverridePath;
+        lookupPath = gLookupOverridePath;
+        gBankSourcesDirty = false;
+    }
+    ReleaseSRWLockExclusive(&gOverrideLock);
+    return changed;
 }
 
 void CleanupVoices(std::vector<Voice>& voices) {
@@ -474,31 +515,12 @@ bool IsGamePaused() {
 float RebalanceVoiceMixer(std::vector<Voice>& voices) {
     // CAEAudioHardware compressible non-stream voice limit.
     constexpr float kCompressibleMixTarget = 6.4f;
-    float loudestWorldVolumeDb = 0.0f;
-    float loudestFrontEndVolumeDb = 0.0f;
-    for (const auto& voice : voices) {
-        auto& loudest = voice.isFrontEnd
-            ? loudestFrontEndVolumeDb
-            : loudestWorldVolumeDb;
-        loudest = std::max(loudest, voice.mixVolumeDb);
-    }
-
     float amplitudeSum = 0.0f;
-    for (auto& voice : voices) {
-        const auto currentLoudest = voice.isFrontEnd
-            ? loudestFrontEndVolumeDb
-            : loudestWorldVolumeDb;
-        // Keep the normalization reference until the voice ends.
-        voice.normalizationReferenceDb = std::max(
-            voice.normalizationReferenceDb,
-            currentLoudest
-        );
+    for (const auto& voice : voices) {
+        const auto audibleVolume = std::min(voice.mixVolumeDb, 0.0f);
         amplitudeSum += std::pow(
             10.0f,
-            (
-                voice.mixVolumeDb -
-                voice.normalizationReferenceDb
-            ) / 20.0f
+            audibleVolume / 20.0f
         );
     }
 
@@ -509,8 +531,7 @@ float RebalanceVoiceMixer(std::vector<Voice>& voices) {
     for (auto& voice : voices) {
         const auto finalVolume = static_cast<LONG>(
             std::clamp(
-                voice.mixVolumeDb -
-                    voice.normalizationReferenceDb +
+                std::min(voice.mixVolumeDb, 0.0f) +
                     voice.outputGainDb +
                     compressionGainDb,
                 -100.0f,
@@ -1187,6 +1208,56 @@ DWORD WINAPI BackendThread(void*) {
     bool replacementWasEnabled =
         gReplaceOriginal.load(std::memory_order_acquire);
     while (WaitForMultipleObjects(2, waits, FALSE, 10) != WAIT_OBJECT_0) {
+        std::string archiveOverride;
+        std::string lookupOverride;
+        if (TakeBankSourceUpdate(archiveOverride, lookupOverride)) {
+            const auto archivePath = archiveOverride.empty()
+                ? gameDirectory + "\\audio\\SFX\\GENRL"
+                : archiveOverride;
+            const auto lookupPath = lookupOverride.empty()
+                ? gameDirectory + "\\audio\\CONFIG\\BankLkup.dat"
+                : lookupOverride;
+            OriginalSoundBank updatedWeapons;
+            OriginalSoundBank updatedBulletHits;
+            error.clear();
+            if (updatedWeapons.Load(
+                    lookupPath,
+                    archivePath,
+                    kWeaponBankId,
+                    error
+                ) &&
+                updatedBulletHits.Load(
+                    lookupPath,
+                    archivePath,
+                    kBulletHitBankId,
+                    error
+                )) {
+                ApplyCurrentOverrides(
+                    RuntimeSoundBank::Weapons,
+                    updatedWeapons
+                );
+                ApplyCurrentOverrides(
+                    RuntimeSoundBank::BulletHits,
+                    updatedBulletHits
+                );
+                StopAndReleaseVoices(voices);
+                minigunSources.clear();
+                for (auto*& buffer : weaponBaseBuffers) {
+                    if (buffer) {
+                        buffer->Release();
+                        buffer = nullptr;
+                    }
+                }
+                for (auto*& buffer : bulletHitBaseBuffers) {
+                    if (buffer) {
+                        buffer->Release();
+                        buffer = nullptr;
+                    }
+                }
+                weaponBank = std::move(updatedWeapons);
+                bulletHitBank = std::move(updatedBulletHits);
+            }
+        }
         ApplyPendingOverrides(
             RuntimeSoundBank::Weapons,
             weaponBank,
@@ -1384,6 +1455,25 @@ bool WeaponBackendClearSampleOverride(
         SetEvent(gWakeEvent);
     }
     return true;
+}
+
+void WeaponBackendSetArchiveOverride(
+    const char* archivePath,
+    const char* lookupPath
+) {
+    const std::string nextArchive = archivePath ? archivePath : "";
+    const std::string nextLookup = lookupPath ? lookupPath : "";
+    AcquireSRWLockExclusive(&gOverrideLock);
+    if (gArchiveOverridePath != nextArchive ||
+        gLookupOverridePath != nextLookup) {
+        gArchiveOverridePath = nextArchive;
+        gLookupOverridePath = nextLookup;
+        gBankSourcesDirty = true;
+    }
+    ReleaseSRWLockExclusive(&gOverrideLock);
+    if (gWakeEvent) {
+        SetEvent(gWakeEvent);
+    }
 }
 
 void WeaponBackendUpdateCameraTransform(

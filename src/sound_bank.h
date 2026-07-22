@@ -19,6 +19,12 @@ public:
         std::size_t bankId,
         std::string& error
     );
+    bool Load(
+        const std::string& lookupPath,
+        const std::string& archivePath,
+        std::size_t bankId,
+        std::string& error
+    );
     bool ApplyWaveOverride(
         std::int16_t soundId,
         const std::string& path,

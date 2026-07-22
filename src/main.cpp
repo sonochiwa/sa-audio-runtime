@@ -713,6 +713,14 @@ AudioRuntimeModLoaderSample(
     }
 }
 
+extern "C" __declspec(dllexport) void __cdecl
+AudioRuntimeModLoaderSources(
+    const char* archivePath,
+    const char* lookupPath
+) {
+    WeaponBackendSetArchiveOverride(archivePath, lookupPath);
+}
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, void*) {
     if (reason == DLL_PROCESS_ATTACH) {
         gModule = module;

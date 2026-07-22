@@ -59,8 +59,8 @@ next to the ASI with default values.
 The bridge receives ModLoader's resolved weapon-bank
 `GENRL\Bank_137\sound_XXX.wav` and bullet-impact-bank
 `GENRL\Bank_21\sound_XXX.wav` files through its plugin API. It follows mod
-priority and live install-state changes. Individual mono PCM WAV replacements
-are supported. Replacing a complete GENRL archive is not supported in 1.1.0.
+priority and live install-state changes. Individual mono PCM WAV files and
+complete `GENRL`/`BankLkup.dat` replacements are supported.
 
 ## Configuration
 

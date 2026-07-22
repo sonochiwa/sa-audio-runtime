@@ -55,12 +55,25 @@ bool OriginalSoundBank::Load(
     std::size_t bankId,
     std::string& error
 ) {
+    return Load(
+        gameDirectory + "\\audio\\CONFIG\\BankLkup.dat",
+        gameDirectory + "\\audio\\SFX\\GENRL",
+        bankId,
+        error
+    );
+}
+
+bool OriginalSoundBank::Load(
+    const std::string& lookupPath,
+    const std::string& archivePath,
+    std::size_t bankId,
+    std::string& error
+) {
     mSampleCount = 0;
     for (auto& sample : mSamples) {
         sample = {};
     }
 
-    const auto lookupPath = gameDirectory + "\\audio\\CONFIG\\BankLkup.dat";
     std::ifstream lookup(lookupPath, std::ios::binary);
     if (!lookup) {
         error = "cannot open " + lookupPath;
@@ -85,10 +98,9 @@ bool OriginalSoundBank::Load(
         return false;
     }
 
-    const auto genrlPath = gameDirectory + "\\audio\\SFX\\GENRL";
-    std::ifstream genrl(genrlPath, std::ios::binary);
+    std::ifstream genrl(archivePath, std::ios::binary);
     if (!genrl) {
-        error = "cannot open " + genrlPath;
+        error = "cannot open " + archivePath;
         return false;
     }
 
