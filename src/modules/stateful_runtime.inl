@@ -87,6 +87,9 @@ void NotifyDialogueFinished(DialogueSoundProxy& proxy) {
 }
 
 void StopDialogue(DialogueSoundProxy& proxy) {
+    if (!proxy.active) {
+        return;
+    }
     AudioJob job{};
     job.type = AudioJobType::DialogueStop;
     job.sourceKey = reinterpret_cast<std::uintptr_t>(proxy.sound.data());
@@ -104,6 +107,45 @@ void RemoveTerminatedDialogueProxy(void* owner) {
     gDialogueSoundProxies.erase(found);
 }
 
+struct DialogueProxyIdentity {
+    void* owner{};
+    std::uintptr_t sourceKey{};
+    std::uint32_t generation{};
+};
+
+DialogueProxyIdentity GetDialogueProxyIdentity(
+    void* owner,
+    const DialogueSoundProxy& proxy
+) {
+    return {
+        owner,
+        reinterpret_cast<std::uintptr_t>(proxy.sound.data()),
+        proxy.generation
+    };
+}
+
+DialogueSoundProxyMap::iterator FindDialogueProxy(
+    const DialogueProxyIdentity& identity
+) {
+    const auto proxy = gDialogueSoundProxies.find(identity.owner);
+    if (proxy == gDialogueSoundProxies.end() ||
+        reinterpret_cast<std::uintptr_t>(proxy->second.sound.data()) !=
+            identity.sourceKey ||
+        proxy->second.generation != identity.generation) {
+        return gDialogueSoundProxies.end();
+    }
+    return proxy;
+}
+
+DialogueSoundProxyMap::iterator EraseDialogueProxy(
+    const DialogueProxyIdentity& identity
+) {
+    const auto proxy = FindDialogueProxy(identity);
+    return proxy != gDialogueSoundProxies.end()
+        ? gDialogueSoundProxies.erase(proxy)
+        : gDialogueSoundProxies.upper_bound(identity.owner);
+}
+
 void __fastcall HookPedSpeechTerminate(void* self, void*) {
     gOriginalPedSpeechTerminate(self);
     RemoveTerminatedDialogueProxy(self);
@@ -114,9 +156,10 @@ void __fastcall HookPedlessSpeechTerminate(void* self, void*) {
     RemoveTerminatedDialogueProxy(self);
 }
 
-void __fastcall HookPoliceScannerDestructor(void* self, void*) {
-    gOriginalPoliceScannerDestructor(self);
+void* __fastcall HookPoliceScannerDestructor(void* self, void*) {
+    auto* result = gOriginalPoliceScannerDestructor(self);
     RemoveTerminatedDialogueProxy(self);
+    return result;
 }
 
 void ServiceDialogueProxies() {
@@ -141,8 +184,10 @@ void ServiceDialogueProxies() {
                 handled = true;
                 break;
             }
+            const auto identity =
+                GetDialogueProxyIdentity(proxy->first, value);
             NotifyDialogueFinished(value);
-            gDialogueSoundProxies.erase(proxy);
+            EraseDialogueProxy(identity);
             handled = true;
             break;
         }
@@ -152,11 +197,14 @@ void ServiceDialogueProxies() {
     }
 
     if (!DialogueBackendShouldReplaceOriginal()) {
-        for (auto& [owner, proxy] : gDialogueSoundProxies) {
+        while (!gDialogueSoundProxies.empty()) {
+            const auto owner = gDialogueSoundProxies.begin()->first;
+            auto& proxy = gDialogueSoundProxies.begin()->second;
+            const auto identity = GetDialogueProxyIdentity(owner, proxy);
             StopDialogue(proxy);
             NotifyDialogueFinished(proxy);
+            EraseDialogueProxy(identity);
         }
-        gDialogueSoundProxies.clear();
         return;
     }
 
@@ -168,9 +216,11 @@ void ServiceDialogueProxies() {
                 ? AudioConfigScannerEnabled()
                 : AudioConfigDialoguesEnabled());
         if (!moduleEnabled) {
+            const auto identity =
+                GetDialogueProxyIdentity(proxy->first, value);
             StopDialogue(value);
             NotifyDialogueFinished(value);
-            proxy = gDialogueSoundProxies.erase(proxy);
+            proxy = EraseDialogueProxy(identity);
             continue;
         }
         const auto stopRequested = ReadSoundField<std::int16_t>(
@@ -178,9 +228,11 @@ void ServiceDialogueProxies() {
             kAeSoundStopRequestedOffset
         ) != 0;
         if (stopRequested || !value.owner) {
+            const auto identity =
+                GetDialogueProxyIdentity(proxy->first, value);
             StopDialogue(value);
             NotifyDialogueFinished(value);
-            proxy = gDialogueSoundProxies.erase(proxy);
+            proxy = EraseDialogueProxy(identity);
             continue;
         }
         const auto flags = ReadSoundField<std::uint16_t>(
@@ -214,35 +266,44 @@ void ServiceDialogueProxies() {
             0.0f,
             32767.0f
         ));
+        const auto identity =
+            GetDialogueProxyIdentity(proxy->first, value);
         reinterpret_cast<UpdateParametersFn>((*vtablePointer)[0])(
             value.owner,
             value.sound.data(),
             playPosition
         );
+
+        proxy = FindDialogueProxy(identity);
+        if (proxy == gDialogueSoundProxies.end()) {
+            proxy = gDialogueSoundProxies.upper_bound(identity.owner);
+            continue;
+        }
+        auto& updatedValue = proxy->second;
         if (ReadSoundField<std::int16_t>(
-                value.sound.data(),
+                updatedValue.sound.data(),
                 kAeSoundStopRequestedOffset
             ) != 0) {
-            StopDialogue(value);
-            NotifyDialogueFinished(value);
-            proxy = gDialogueSoundProxies.erase(proxy);
+            StopDialogue(updatedValue);
+            NotifyDialogueFinished(updatedValue);
+            proxy = EraseDialogueProxy(identity);
             continue;
         }
         if ((ReadSoundField<std::uint16_t>(
-                 value.sound.data(),
+                 updatedValue.sound.data(),
                  kAeSoundFlagsOffset
              ) & kSoundRequestUpdates) == 0) {
             proxy = gDialogueSoundProxies.erase(proxy);
             continue;
         }
         auto job = BuildDialogueJob(
-            value.sound.data(),
-            reinterpret_cast<std::uintptr_t>(value.sound.data()),
-            value.generation,
-            value.bankId,
+            updatedValue.sound.data(),
+            identity.sourceKey,
+            updatedValue.generation,
+            updatedValue.bankId,
             AudioJobType::DialogueUpdate
         );
-        job.baseSpeed = value.resolvedSpeed;
+        job.baseSpeed = updatedValue.resolvedSpeed;
         DialogueBackendEnqueue(job);
         ++proxy;
     }

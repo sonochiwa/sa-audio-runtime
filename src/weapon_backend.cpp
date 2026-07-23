@@ -208,6 +208,18 @@ std::string gLookupOverridePath;
 bool gBankSourcesDirty{};
 bool gDynamicBanksDirty{};
 
+void RequestDeviceRecovery() {
+    gDeviceRecoveryRequested.store(true, std::memory_order_release);
+}
+
+bool AudioCallSucceeded(HRESULT result) {
+    if (SUCCEEDED(result)) {
+        return true;
+    }
+    RequestDeviceRecovery();
+    return false;
+}
+
 bool IsCoalescedSourceJob(AudioJobType type) {
     return type == AudioJobType::VehicleUpdate ||
            type == AudioJobType::VehicleStop ||
@@ -529,10 +541,7 @@ void CleanupVoices(std::vector<Voice>& voices) {
                 if (voice.buffer &&
                     (FAILED(voice.buffer->GetStatus(&status)) ||
                      (status & DSBSTATUS_BUFFERLOST))) {
-                    gDeviceRecoveryRequested.store(
-                        true,
-                        std::memory_order_release
-                    );
+                    RequestDeviceRecovery();
                     return false;
                 }
                 if (!voice.buffer ||
@@ -749,21 +758,37 @@ void PlaySample(
         std::clamp(volumeDb, -100.0f, 0.0f) * 100.0f
     );
 
-    voice->SetCurrentPosition(0);
-    voice->SetFrequency(frequency);
-    voice->SetVolume(std::clamp<LONG>(volume, DSBVOLUME_MIN, DSBVOLUME_MAX));
-    spatialBuffer->SetMode(
-        forcedFront ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
-        DS3D_IMMEDIATE
-    );
-    spatialBuffer->SetMinDistance(1.0f, DS3D_IMMEDIATE);
-    spatialBuffer->SetMaxDistance(10000.0f, DS3D_IMMEDIATE);
-    spatialBuffer->SetPosition(
-        position.x,
-        position.y,
-        position.z,
-        DS3D_IMMEDIATE
-    );
+    const bool configured =
+        AudioCallSucceeded(voice->SetCurrentPosition(0)) &&
+        AudioCallSucceeded(voice->SetFrequency(frequency)) &&
+        AudioCallSucceeded(voice->SetVolume(std::clamp<LONG>(
+            volume,
+            DSBVOLUME_MIN,
+            DSBVOLUME_MAX
+        ))) &&
+        AudioCallSucceeded(spatialBuffer->SetMode(
+            forcedFront ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
+            DS3D_IMMEDIATE
+        )) &&
+        AudioCallSucceeded(spatialBuffer->SetMinDistance(
+            1.0f,
+            DS3D_IMMEDIATE
+        )) &&
+        AudioCallSucceeded(spatialBuffer->SetMaxDistance(
+            10000.0f,
+            DS3D_IMMEDIATE
+        )) &&
+        AudioCallSucceeded(spatialBuffer->SetPosition(
+            position.x,
+            position.y,
+            position.z,
+            DS3D_IMMEDIATE
+        ));
+    if (!configured) {
+        spatialBuffer->Release();
+        voice->Release();
+        return;
+    }
     Voice newVoice{};
     newVoice.buffer = voice;
     newVoice.spatialBuffer = spatialBuffer;
@@ -800,10 +825,7 @@ void StartPendingVoices(std::vector<Voice>& voices) {
                 voice.looping ? DSBPLAY_LOOPING : 0
             ))) {
             voice.pendingStart = true;
-            gDeviceRecoveryRequested.store(
-                true,
-                std::memory_order_release
-            );
+            RequestDeviceRecovery();
         }
     }
 }
@@ -815,9 +837,13 @@ void SuspendVoices(std::vector<Voice>& voices) {
             continue;
         }
         DWORD status{};
-        if (SUCCEEDED(voice.buffer->GetStatus(&status)) &&
-            (status & DSBSTATUS_PLAYING) &&
-            SUCCEEDED(voice.buffer->Stop())) {
+        const auto statusResult = voice.buffer->GetStatus(&status);
+        if (FAILED(statusResult)) {
+            RequestDeviceRecovery();
+            continue;
+        }
+        if ((status & DSBSTATUS_PLAYING) &&
+            AudioCallSucceeded(voice.buffer->Stop())) {
             voice.suspended = true;
         }
     }
@@ -835,10 +861,7 @@ void ResumeVoices(std::vector<Voice>& voices) {
                 voice.looping ? DSBPLAY_LOOPING : 0
             ))) {
             voice.suspended = true;
-            gDeviceRecoveryRequested.store(
-                true,
-                std::memory_order_release
-            );
+            RequestDeviceRecovery();
         }
     }
 }
@@ -935,7 +958,7 @@ float RebalanceVoiceMixer(std::vector<Voice>& voices) {
                 0.0f
             ) * 100.0f
         );
-        voice.buffer->SetVolume(finalVolume);
+        AudioCallSucceeded(voice.buffer->SetVolume(finalVolume));
     }
     return compressionGainDb;
 }
@@ -1063,12 +1086,12 @@ void UpdateVoicePositions(std::vector<Voice>& voices) {
         const auto relative =
             TransformWorldPosition(transform, voice.worldPosition);
         voice.relativePosition = relative;
-        voice.spatialBuffer->SetPosition(
+        AudioCallSucceeded(voice.spatialBuffer->SetPosition(
             relative.x,
             relative.y,
             relative.z,
             DS3D_IMMEDIATE
-        );
+        ));
         voice.mixVolumeDb =
             voice.sourceVolumeDb -
             voice.headroomDb +
@@ -1086,7 +1109,7 @@ void UpdateVoicePositions(std::vector<Voice>& voices) {
                 static_cast<double>(DSBFREQUENCY_MIN),
                 static_cast<double>(DSBFREQUENCY_MAX)
             ));
-            voice.buffer->SetFrequency(frequency);
+            AudioCallSucceeded(voice.buffer->SetFrequency(frequency));
         }
     }
 }
@@ -1724,10 +1747,14 @@ bool CreateVehicleVoice(
         static_cast<double>(DSBFREQUENCY_MIN),
         static_cast<double>(DSBFREQUENCY_MAX)
     ));
-    buffer->SetFrequency(frequency);
-    buffer->SetVolume(static_cast<LONG>(
-        std::clamp(listenerVolume, -100.0f, 0.0f) * 100.0f
-    ));
+    if (!AudioCallSucceeded(buffer->SetFrequency(frequency)) ||
+        !AudioCallSucceeded(buffer->SetVolume(static_cast<LONG>(
+            std::clamp(listenerVolume, -100.0f, 0.0f) * 100.0f
+        )))) {
+        spatialBuffer->Release();
+        buffer->Release();
+        return false;
+    }
     if (job.startPercentage && job.playTime > 0) {
         DSBCAPS capabilities{};
         capabilities.dwSize = sizeof(capabilities);
@@ -1738,27 +1765,44 @@ bool CreateVehicleVoice(
                 100u
             );
             position &= ~1u;
-            if (position < capabilities.dwBufferBytes) {
-                buffer->SetCurrentPosition(position);
+            if (position < capabilities.dwBufferBytes &&
+                !AudioCallSucceeded(
+                    buffer->SetCurrentPosition(position)
+                )) {
+                spatialBuffer->Release();
+                buffer->Release();
+                return false;
             }
         }
-    } else {
-        buffer->SetCurrentPosition(0);
+    } else if (!AudioCallSucceeded(buffer->SetCurrentPosition(0))) {
+        spatialBuffer->Release();
+        buffer->Release();
+        return false;
     }
-    spatialBuffer->SetMode(
-        job.isFrontEnd ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
-        DS3D_IMMEDIATE
-    );
-    spatialBuffer->SetMinDistance(1.0f, DS3D_IMMEDIATE);
-    spatialBuffer->SetMaxDistance(10000.0f, DS3D_IMMEDIATE);
-    spatialBuffer->SetPosition(
-        job.relativePosition.x,
-        job.isFrontEnd && job.relativePosition.y == 0.0f
-            ? 1.0f
-            : job.relativePosition.y,
-        job.relativePosition.z,
-        DS3D_IMMEDIATE
-    );
+    if (!AudioCallSucceeded(spatialBuffer->SetMode(
+            job.isFrontEnd ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
+            DS3D_IMMEDIATE
+        )) ||
+        !AudioCallSucceeded(spatialBuffer->SetMinDistance(
+            1.0f,
+            DS3D_IMMEDIATE
+        )) ||
+        !AudioCallSucceeded(spatialBuffer->SetMaxDistance(
+            10000.0f,
+            DS3D_IMMEDIATE
+        )) ||
+        !AudioCallSucceeded(spatialBuffer->SetPosition(
+            job.relativePosition.x,
+            job.isFrontEnd && job.relativePosition.y == 0.0f
+                ? 1.0f
+                : job.relativePosition.y,
+            job.relativePosition.z,
+            DS3D_IMMEDIATE
+        ))) {
+        spatialBuffer->Release();
+        buffer->Release();
+        return false;
+    }
 
     Voice voice{};
     voice.buffer = buffer;
@@ -1811,8 +1855,11 @@ void ContinueVehicleLoops(
             continue;
         }
         DWORD status{};
-        if (FAILED(voice.buffer->GetStatus(&status)) ||
-            (status & DSBSTATUS_PLAYING)) {
+        if (FAILED(voice.buffer->GetStatus(&status))) {
+            RequestDeviceRecovery();
+            continue;
+        }
+        if (status & DSBSTATUS_PLAYING) {
             continue;
         }
         auto* bank = GetVehicleBank(
@@ -1861,7 +1908,7 @@ void ContinueVehicleLoops(
         voice.looping = true;
         voice.pendingStart = true;
         voice.vehicleLoopPending = false;
-        loopBuffer->SetFrequency(static_cast<DWORD>(std::clamp(
+        const auto frequency = static_cast<DWORD>(std::clamp(
             static_cast<double>(voice.sampleRate) *
                 std::max(
                     voice.playbackSpeed * voice.dopplerScale,
@@ -1869,23 +1916,32 @@ void ContinueVehicleLoops(
                 ),
             static_cast<double>(DSBFREQUENCY_MIN),
             static_cast<double>(DSBFREQUENCY_MAX)
-        )));
-        loopSpatial->SetMode(
-            voice.isFrontEnd
-                ? DS3DMODE_HEADRELATIVE
-                : DS3DMODE_NORMAL,
-            DS3D_IMMEDIATE
-        );
-        loopSpatial->SetMinDistance(1.0f, DS3D_IMMEDIATE);
-        loopSpatial->SetMaxDistance(10000.0f, DS3D_IMMEDIATE);
-        loopSpatial->SetPosition(
-            voice.worldPosition.x,
-            voice.isFrontEnd && voice.worldPosition.y == 0.0f
-                ? 1.0f
-                : voice.worldPosition.y,
-            voice.worldPosition.z,
-            DS3D_IMMEDIATE
-        );
+        ));
+        if (!AudioCallSucceeded(loopBuffer->SetFrequency(frequency)) ||
+            !AudioCallSucceeded(loopSpatial->SetMode(
+                voice.isFrontEnd
+                    ? DS3DMODE_HEADRELATIVE
+                    : DS3DMODE_NORMAL,
+                DS3D_IMMEDIATE
+            )) ||
+            !AudioCallSucceeded(loopSpatial->SetMinDistance(
+                1.0f,
+                DS3D_IMMEDIATE
+            )) ||
+            !AudioCallSucceeded(loopSpatial->SetMaxDistance(
+                10000.0f,
+                DS3D_IMMEDIATE
+            )) ||
+            !AudioCallSucceeded(loopSpatial->SetPosition(
+                voice.worldPosition.x,
+                voice.isFrontEnd && voice.worldPosition.y == 0.0f
+                    ? 1.0f
+                    : voice.worldPosition.y,
+                voice.worldPosition.z,
+                DS3D_IMMEDIATE
+            ))) {
+            voice.vehicleLoopPending = false;
+        }
     }
 }
 
@@ -2443,18 +2499,26 @@ bool InitialiseListener(
         return false;
     }
 
-    listener->SetPosition(0.0f, 0.0f, 0.0f, DS3D_IMMEDIATE);
-    listener->SetOrientation(
-        0.0f,
-        1.0f,
-        0.0f,
-        0.0f,
-        0.0f,
-        -1.0f,
-        DS3D_IMMEDIATE
-    );
-    listener->SetRolloffFactor(0.0f, DS3D_IMMEDIATE);
-    listener->SetDopplerFactor(0.0f, DS3D_IMMEDIATE);
+    if (FAILED(listener->SetPosition(
+            0.0f,
+            0.0f,
+            0.0f,
+            DS3D_IMMEDIATE
+        )) ||
+        FAILED(listener->SetOrientation(
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            -1.0f,
+            DS3D_IMMEDIATE
+        )) ||
+        FAILED(listener->SetRolloffFactor(0.0f, DS3D_IMMEDIATE)) ||
+        FAILED(listener->SetDopplerFactor(0.0f, DS3D_IMMEDIATE))) {
+        listener->Release();
+        return false;
+    }
     *output = listener;
     return true;
 }

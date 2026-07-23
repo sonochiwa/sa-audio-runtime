@@ -21,6 +21,10 @@
   effects.
 - Added automatic DirectSound device recovery while preserving persistent
   source state and playback position.
+- Extended device-loss detection to failed volume, frequency and 3D-position
+  updates instead of relying only on playback and buffer-status failures.
+- Fixed the police-scanner destructor hook ABI and protected dialogue proxy
+  iteration from reentrant GTA audio callbacks.
 - Fixed pending and suspended voices surviving category shutdown.
 - Added transactional hook installation and rollback for the custom
   `RequestNewSound` hotpatch.

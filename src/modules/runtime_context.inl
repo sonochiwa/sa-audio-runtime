@@ -166,6 +166,7 @@ using CancelBankSlotSoundsFn =
 using CancelOwnedSoundsFn =
     void(__thiscall*)(void*, void*, bool);
 using AudioEntityTerminateFn = void(__thiscall*)(void*);
+using AudioEntityDestructorFn = void*(__thiscall*)(void*);
 using GetPositionRelativeToCameraFn = void(__cdecl*)(AudioVector*, void*);
 using VectorRelativeToCameraFn =
     void(__cdecl*)(AudioVector*, const AudioVector*);
@@ -199,7 +200,7 @@ CancelBankSlotSoundsFn gOriginalCancelBankSlotSounds{};
 CancelOwnedSoundsFn gOriginalCancelOwnedSounds{};
 AudioEntityTerminateFn gOriginalPedSpeechTerminate{};
 AudioEntityTerminateFn gOriginalPedlessSpeechTerminate{};
-AudioEntityTerminateFn gOriginalPoliceScannerDestructor{};
+AudioEntityDestructorFn gOriginalPoliceScannerDestructor{};
 bool gHotkeyWasDown{};
 
 constexpr std::size_t kVehicleEngineSoundCount = 12;
@@ -356,7 +357,8 @@ std::map<std::uint64_t, VehicleSoundProxy> gVehicleSoundProxies;
 std::set<void*> gVehicleAudioOwners;
 std::uint32_t gVehicleOneShotSequence{};
 thread_local VehicleCapture gVehicleCapture{};
-std::map<void*, DialogueSoundProxy> gDialogueSoundProxies;
+using DialogueSoundProxyMap = std::map<void*, DialogueSoundProxy>;
+DialogueSoundProxyMap gDialogueSoundProxies;
 std::map<std::uint32_t, StatefulSoundProxy> gStatefulSoundProxies;
 std::uint32_t gStatefulSoundSequence{};
 

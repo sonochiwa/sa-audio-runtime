@@ -16,6 +16,8 @@ bool IsVirtualKeyDown(int key) {
     return key != 0 && (GetAsyncKeyState(key) & 0x8000) != 0;
 }
 
+void ApplyRuntimeState();
+
 void ServiceToggleHotkey() {
     if (!AudioConfigHotkeyEnabled()) {
         gHotkeyWasDown = false;
@@ -31,27 +33,7 @@ void ServiceToggleHotkey() {
         AudioConfigReload();
         const bool enabled = !AudioConfigIsEnabled();
         AudioConfigSetEnabled(enabled);
-        WeaponBackendSetEnabled(
-            enabled &&
-            (AudioConfigGunshotsEnabled() ||
-             AudioConfigBulletImpactsEnabled())
-        );
-        VehicleBackendSetEnabled(
-            enabled &&
-            (AudioConfigVehicleEnginesEnabled() ||
-             AudioConfigVehicleEffectsEnabled())
-        );
-        DialogueBackendSetEnabled(
-            enabled &&
-            (AudioConfigDialoguesEnabled() ||
-             AudioConfigScannerEnabled() ||
-             AudioConfigMiscEffectsEnabled() ||
-             AudioConfigExplosionsEnabled() ||
-             AudioConfigWeaponEffectsEnabled() ||
-             AudioConfigVehicleCollisionsEnabled() ||
-             AudioConfigCharacterEffectsEnabled() ||
-             AudioConfigWorldAmbienceEnabled())
-        );
+        ApplyRuntimeState();
         ShowBackendState(enabled);
     }
     gHotkeyWasDown = hotkeyDown;
