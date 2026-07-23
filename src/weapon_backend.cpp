@@ -17,12 +17,15 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <deque>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
 
-constexpr std::uint32_t kQueueCapacity = 1024;
+constexpr std::uint32_t kQueueCapacity = 8192;
 constexpr std::uint32_t kQueueMask = kQueueCapacity - 1;
 constexpr std::size_t kMaxOriginalSounds = 400;
 constexpr std::size_t kWeaponBankId = 143;
@@ -37,9 +40,11 @@ struct Voice {
     float normalizationReferenceDb{};
     bool pendingStart{};
     bool suspended{};
+    bool isUnpausable{};
     std::int16_t soundId{-1};
     float headroomDb{};
     AudioVector worldPosition{};
+    AudioVector relativePosition{};
     float sourceVolumeDb{};
     float rollOffFactor{};
     bool followsCamera{};
@@ -50,13 +55,123 @@ struct Voice {
     bool minigunTailFading{};
     std::uint32_t minigunFadeFrame{};
     bool isBulletHit{};
+    std::uintptr_t vehicleSourceKey{};
+    bool isVehicleOneShot{};
+    std::uint32_t vehicleGeneration{};
+    std::uint32_t sampleRate{};
+    float playbackSpeed{1.0f};
+    float dopplerScale{};
+    std::int16_t vehicleBankId{-1};
+    bool vehicleLoopPending{};
+    bool isRuntimeEffect{};
+    bool isStatefulEffect{};
+    bool reportsCompletion{};
 };
 
 struct MinigunSource {
     std::uintptr_t key{};
-    DWORD lastHeartbeat{};
+    ULONGLONG lastHeartbeat{};
     AudioJob job{};
 };
+
+struct VehicleSource {
+    AudioJob job{};
+    ULONGLONG lastHeartbeat{};
+    std::uint32_t lastStartedGeneration{};
+};
+
+struct VirtualRuntimeSource {
+    AudioJob job{};
+    ULONGLONG lastUpdateAt{};
+    DWORD durationMs{};
+    double playPositionMs{};
+    bool looping{};
+};
+
+enum class VoiceGroup : std::uint8_t {
+    Weapons,
+    Vehicles,
+    Runtime
+};
+
+struct VehicleBank {
+    OriginalSoundBank samples;
+    std::array<IDirectSoundBuffer*, kMaxOriginalSounds> baseBuffers{};
+    bool loadAttempted{};
+    bool loaded{};
+};
+
+SRWLOCK gOverrideLock = SRWLOCK_INIT;
+std::unordered_map<std::uint32_t, std::string> gDynamicOverridePaths;
+std::array<std::string, 9> gPackOverridePaths{};
+
+std::uint32_t GetDynamicOverrideKey(
+    std::int16_t bankId,
+    std::int16_t soundId
+) {
+    return
+        static_cast<std::uint32_t>(static_cast<std::uint16_t>(bankId)) << 16 |
+        static_cast<std::uint16_t>(soundId);
+}
+
+int GetPackIdForBank(std::int16_t bankId) {
+    constexpr std::int16_t firstBanks[] = {
+        0, 7, 144, 147, 365, 411, 429, 638, 690
+    };
+    int packId = -1;
+    for (int index = 0; index < static_cast<int>(std::size(firstBanks));
+         ++index) {
+        if (bankId < firstBanks[index]) {
+            break;
+        }
+        packId = index;
+    }
+    return packId;
+}
+
+const char* GetPackName(int packId) {
+    constexpr const char* names[] = {
+        "FEET", "GENRL", "PAIN_A", "SCRIPT", "SPC_EA",
+        "SPC_FA", "SPC_GA", "SPC_NA", "SPC_PA"
+    };
+    return packId >= 0 && packId < static_cast<int>(std::size(names))
+        ? names[packId]
+        : nullptr;
+}
+
+void ApplyDynamicOverrides(std::int16_t bankId, OriginalSoundBank& bank) {
+    AcquireSRWLockShared(&gOverrideLock);
+    for (std::int16_t soundId = 0;
+         soundId < static_cast<std::int16_t>(kMaxOriginalSounds);
+         ++soundId) {
+        const auto found = gDynamicOverridePaths.find(
+            GetDynamicOverrideKey(bankId, soundId)
+        );
+        if (found == gDynamicOverridePaths.end()) {
+            continue;
+        }
+        std::string error;
+        bank.ApplyWaveOverride(soundId, found->second, error);
+    }
+    ReleaseSRWLockShared(&gOverrideLock);
+}
+
+void ReleaseVehicleBanks(
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks
+) {
+    for (auto& [bankId, bank] : banks) {
+        if (!bank) {
+            continue;
+        }
+        for (auto*& buffer : bank->baseBuffers) {
+            if (buffer) {
+                buffer->Release();
+                buffer = nullptr;
+            }
+        }
+    }
+    banks.clear();
+}
 
 HMODULE gModule{};
 HANDLE gThread{};
@@ -67,11 +182,17 @@ std::atomic<std::uint32_t> gWrite{};
 std::atomic<std::uint32_t> gRead{};
 std::atomic<bool> gReady{};
 std::atomic<bool> gReplaceOriginal{};
+std::atomic<bool> gReplaceVehicles{};
+std::atomic<bool> gReplaceDialogues{};
+std::atomic<bool> gDeviceRecoveryRequested{};
+SRWLOCK gCoalescedJobLock = SRWLOCK_INIT;
+std::vector<AudioJob> gCoalescedJobs;
+SRWLOCK gCompletionLock = SRWLOCK_INIT;
+std::deque<AudioCompletion> gCompletions;
 std::array<std::atomic<float>, 12> gCameraTransform{};
 std::atomic<std::uint32_t> gCameraTransformGeneration{};
 std::atomic<bool> gCanSeeOutside{true};
 std::atomic<std::uint32_t> gEnvironmentFrame{};
-SRWLOCK gOverrideLock = SRWLOCK_INIT;
 constexpr auto kRuntimeSoundBankCount =
     static_cast<std::size_t>(RuntimeSoundBank::Count);
 std::array<
@@ -85,6 +206,73 @@ std::array<
 std::string gArchiveOverridePath;
 std::string gLookupOverridePath;
 bool gBankSourcesDirty{};
+bool gDynamicBanksDirty{};
+
+bool IsCoalescedSourceJob(AudioJobType type) {
+    return type == AudioJobType::VehicleUpdate ||
+           type == AudioJobType::VehicleStop ||
+           type == AudioJobType::DialogueUpdate ||
+           type == AudioJobType::DialogueStop ||
+           type == AudioJobType::StatefulUpdate ||
+           type == AudioJobType::StatefulStop;
+}
+
+std::uint64_t GetCoalescedJobKey(const AudioJob& job) {
+    std::uint64_t group{};
+    switch (job.type) {
+    case AudioJobType::VehicleUpdate:
+    case AudioJobType::VehicleStop:
+        group = 1;
+        break;
+    case AudioJobType::DialogueUpdate:
+    case AudioJobType::DialogueStop:
+        group = 2;
+        break;
+    default:
+        group = 3;
+        break;
+    }
+    return (group << 56) |
+           static_cast<std::uint64_t>(job.sourceKey);
+}
+
+void TakeCoalescedJobs(std::vector<AudioJob>& jobs) {
+    AcquireSRWLockExclusive(&gCoalescedJobLock);
+    jobs.assign(gCoalescedJobs.begin(), gCoalescedJobs.end());
+    gCoalescedJobs.clear();
+    ReleaseSRWLockExclusive(&gCoalescedJobLock);
+}
+
+void ClearCoalescedJobs() {
+    AcquireSRWLockExclusive(&gCoalescedJobLock);
+    gCoalescedJobs.clear();
+    ReleaseSRWLockExclusive(&gCoalescedJobLock);
+}
+
+void QueueCompletion(const AudioCompletion& completion) {
+    constexpr std::size_t kMaximumCompletionBacklog = 2048;
+    AcquireSRWLockExclusive(&gCompletionLock);
+    if (!completion.finished &&
+        gCompletions.size() >= kMaximumCompletionBacklog) {
+        const auto existing = std::find_if(
+            gCompletions.begin(),
+            gCompletions.end(),
+            [&](const AudioCompletion& queued) {
+                return !queued.finished &&
+                       queued.sourceKey == completion.sourceKey &&
+                       queued.sourceGeneration ==
+                           completion.sourceGeneration;
+            }
+        );
+        if (existing != gCompletions.end()) {
+            *existing = completion;
+        }
+        ReleaseSRWLockExclusive(&gCompletionLock);
+        return;
+    }
+    gCompletions.push_back(completion);
+    ReleaseSRWLockExclusive(&gCompletionLock);
+}
 
 std::string GetModuleDirectory() {
     char path[MAX_PATH]{};
@@ -96,11 +284,12 @@ std::string GetModuleDirectory() {
 }
 
 std::string GetGameDirectory() {
-    auto directory = GetModuleDirectory();
-    if (const auto slash = directory.find_last_of('\\'); slash != std::string::npos) {
-        directory.resize(slash);
+    char path[MAX_PATH]{};
+    GetModuleFileNameA(nullptr, path, MAX_PATH);
+    if (auto* slash = std::strrchr(path, '\\')) {
+        *slash = '\0';
     }
-    return directory;
+    return path;
 }
 
 HWND FindProcessWindow() {
@@ -283,6 +472,50 @@ bool TakeBankSourceUpdate(
     return changed;
 }
 
+bool TakeDynamicBankUpdate() {
+    AcquireSRWLockExclusive(&gOverrideLock);
+    const bool changed = gDynamicBanksDirty;
+    gDynamicBanksDirty = false;
+    ReleaseSRWLockExclusive(&gOverrideLock);
+    return changed;
+}
+
+void PublishCompletion(const Voice& voice) {
+    if (!voice.reportsCompletion || voice.vehicleSourceKey == 0) {
+        return;
+    }
+    QueueCompletion({
+        voice.vehicleSourceKey,
+        voice.vehicleGeneration
+    });
+}
+
+void PublishDialogueStarted(
+    const AudioJob& job,
+    const OriginalPcmSample& sample
+) {
+    const auto samples = sample.pcm.size() / sizeof(std::int16_t);
+    const auto length = sample.sampleRate != 0
+        ? static_cast<double>(samples) * 1000.0 /
+            static_cast<double>(sample.sampleRate) /
+            std::max(static_cast<double>(job.baseSpeed), 0.05)
+        : 0.0;
+    QueueCompletion({
+        job.sourceKey,
+        job.sourceGeneration,
+        false,
+        static_cast<std::int16_t>(std::clamp(length, 0.0, 32767.0))
+    });
+}
+
+void PublishCompletion(const AudioJob& job) {
+    Voice voice{};
+    voice.reportsCompletion = true;
+    voice.vehicleSourceKey = job.sourceKey;
+    voice.vehicleGeneration = job.sourceGeneration;
+    PublishCompletion(voice);
+}
+
 void CleanupVoices(std::vector<Voice>& voices) {
     voices.erase(
         std::remove_if(
@@ -293,9 +526,16 @@ void CleanupVoices(std::vector<Voice>& voices) {
                     return false;
                 }
                 DWORD status{};
+                if (voice.buffer &&
+                    (FAILED(voice.buffer->GetStatus(&status)) ||
+                     (status & DSBSTATUS_BUFFERLOST))) {
+                    gDeviceRecoveryRequested.store(
+                        true,
+                        std::memory_order_release
+                    );
+                    return false;
+                }
                 if (!voice.buffer ||
-                    FAILED(voice.buffer->GetStatus(&status)) ||
-                    (status & DSBSTATUS_BUFFERLOST) ||
                     !(status & DSBSTATUS_PLAYING)) {
                     if (voice.spatialBuffer) {
                         voice.spatialBuffer->Release();
@@ -303,6 +543,7 @@ void CleanupVoices(std::vector<Voice>& voices) {
                     if (voice.buffer) {
                         voice.buffer->Release();
                     }
+                    PublishCompletion(voice);
                     return true;
                 }
                 return false;
@@ -310,6 +551,107 @@ void CleanupVoices(std::vector<Voice>& voices) {
         ),
         voices.end()
     );
+}
+
+VoiceGroup GetVoiceGroup(const Voice& voice) {
+    if (voice.isRuntimeEffect) {
+        return VoiceGroup::Runtime;
+    }
+    if (voice.vehicleSourceKey != 0) {
+        return VoiceGroup::Vehicles;
+    }
+    return VoiceGroup::Weapons;
+}
+
+float GetVoicePriority(const Voice& voice) {
+    auto priority = voice.mixVolumeDb + voice.outputGainDb;
+    if (voice.isFrontEnd) {
+        priority += 24.0f;
+    }
+    if (voice.looping || voice.vehicleLoopPending) {
+        priority += 6.0f;
+    }
+    if (voice.reportsCompletion) {
+        priority += 10.0f;
+    }
+    if (voice.isBulletHit) {
+        priority -= 3.0f;
+    }
+    if (voice.isTail) {
+        priority -= 2.0f;
+    }
+    return priority;
+}
+
+std::size_t GetVoiceGroupLimit(VoiceGroup group) {
+    switch (group) {
+    case VoiceGroup::Weapons:
+        return 48;
+    case VoiceGroup::Vehicles:
+        return 40;
+    case VoiceGroup::Runtime:
+        return 48;
+    }
+    return 0;
+}
+
+bool ReserveVoiceSlot(
+    std::vector<Voice>& voices,
+    VoiceGroup incomingGroup,
+    float incomingPriority
+) {
+    constexpr std::size_t kMaximumPhysicalVoices = 96;
+    constexpr std::size_t kGroupReservation = 12;
+    std::array<std::size_t, 3> counts{};
+    for (const auto& voice : voices) {
+        ++counts[static_cast<std::size_t>(GetVoiceGroup(voice))];
+    }
+
+    const auto incomingIndex =
+        static_cast<std::size_t>(incomingGroup);
+    const bool groupIsFull =
+        counts[incomingIndex] >= GetVoiceGroupLimit(incomingGroup);
+    if (!groupIsFull && voices.size() < kMaximumPhysicalVoices) {
+        return true;
+    }
+
+    auto candidate = voices.end();
+    float candidatePriority{};
+    for (auto voice = voices.begin(); voice != voices.end(); ++voice) {
+        const auto group = GetVoiceGroup(*voice);
+        const auto groupIndex = static_cast<std::size_t>(group);
+        if (groupIsFull) {
+            if (group != incomingGroup) {
+                continue;
+            }
+        } else if (counts[groupIndex] <= kGroupReservation) {
+            continue;
+        }
+
+        const auto priority = GetVoicePriority(*voice);
+        if (candidate == voices.end() ||
+            priority < candidatePriority) {
+            candidate = voice;
+            candidatePriority = priority;
+        }
+    }
+    if (candidate == voices.end() ||
+        candidatePriority >= incomingPriority) {
+        return false;
+    }
+
+    PublishCompletion(*candidate);
+    if (candidate->buffer) {
+        candidate->buffer->Stop();
+    }
+    if (candidate->spatialBuffer) {
+        candidate->spatialBuffer->Release();
+    }
+    if (candidate->buffer) {
+        candidate->buffer->Release();
+    }
+    voices.erase(candidate);
+    return true;
 }
 
 void PlaySample(
@@ -333,6 +675,26 @@ void PlaySample(
 ) {
     const auto* sample = bank.Get(soundId);
     if (!sample || sample->pcm.empty() || volumeDb <= -100.0f) {
+        return;
+    }
+    auto priority = volumeDb;
+    if (forcedFront) {
+        priority += 24.0f;
+    }
+    if (looping) {
+        priority += 6.0f;
+    }
+    if (isBulletHit) {
+        priority -= 3.0f;
+    }
+    if (isTail) {
+        priority -= 2.0f;
+    }
+    if (!ReserveVoiceSlot(
+            voices,
+            VoiceGroup::Weapons,
+            priority
+        )) {
         return;
     }
 
@@ -402,30 +764,28 @@ void PlaySample(
         position.z,
         DS3D_IMMEDIATE
     );
-    // Start layers together after normalization, matching SynchPlayback.
-    voices.push_back({
-        voice,
-        spatialBuffer,
-        volumeDb - outputGainDb,
-        outputGainDb,
-        forcedFront,
-        0.0f,
-        true,
-        false,
-        soundId,
-        static_cast<float>(sample->headroom) / 100.0f,
-        worldPosition,
-        sourceVolumeDb,
-        rollOffFactor,
-        !forcedFront && rollOffFactor > 0.0f,
-        isTail,
-        gEnvironmentFrame.load(std::memory_order_acquire),
-        minigunSourceKey,
-        looping,
-        false,
-        0,
-        isBulletHit
-    });
+    Voice newVoice{};
+    newVoice.buffer = voice;
+    newVoice.spatialBuffer = spatialBuffer;
+    newVoice.mixVolumeDb = volumeDb - outputGainDb;
+    newVoice.outputGainDb = outputGainDb;
+    newVoice.isFrontEnd = forcedFront;
+    newVoice.pendingStart = true;
+    newVoice.soundId = soundId;
+    newVoice.headroomDb =
+        static_cast<float>(sample->headroom) / 100.0f;
+    newVoice.worldPosition = worldPosition;
+    newVoice.sourceVolumeDb = sourceVolumeDb;
+    newVoice.rollOffFactor = rollOffFactor;
+    newVoice.followsCamera =
+        !forcedFront && rollOffFactor > 0.0f;
+    newVoice.isTail = isTail;
+    newVoice.environmentFrame =
+        gEnvironmentFrame.load(std::memory_order_acquire);
+    newVoice.minigunSourceKey = minigunSourceKey;
+    newVoice.looping = looping;
+    newVoice.isBulletHit = isBulletHit;
+    voices.push_back(newVoice);
 }
 
 void StartPendingVoices(std::vector<Voice>& voices) {
@@ -439,19 +799,19 @@ void StartPendingVoices(std::vector<Voice>& voices) {
                 0,
                 voice.looping ? DSBPLAY_LOOPING : 0
             ))) {
-            if (voice.spatialBuffer) {
-                voice.spatialBuffer->Release();
-                voice.spatialBuffer = nullptr;
-            }
-            voice.buffer->Release();
-            voice.buffer = nullptr;
+            voice.pendingStart = true;
+            gDeviceRecoveryRequested.store(
+                true,
+                std::memory_order_release
+            );
         }
     }
 }
 
 void SuspendVoices(std::vector<Voice>& voices) {
     for (auto& voice : voices) {
-        if (!voice.buffer || voice.pendingStart || voice.suspended) {
+        if (!voice.buffer || voice.pendingStart || voice.suspended ||
+            voice.isUnpausable) {
             continue;
         }
         DWORD status{};
@@ -474,18 +834,23 @@ void ResumeVoices(std::vector<Voice>& voices) {
                 0,
                 voice.looping ? DSBPLAY_LOOPING : 0
             ))) {
-            if (voice.spatialBuffer) {
-                voice.spatialBuffer->Release();
-                voice.spatialBuffer = nullptr;
-            }
-            voice.buffer->Release();
-            voice.buffer = nullptr;
+            voice.suspended = true;
+            gDeviceRecoveryRequested.store(
+                true,
+                std::memory_order_release
+            );
         }
     }
 }
 
-void StopAndReleaseVoices(std::vector<Voice>& voices) {
+void StopAndReleaseVoices(
+    std::vector<Voice>& voices,
+    bool publishCompletions = true
+) {
     for (auto& voice : voices) {
+        if (publishCompletions) {
+            PublishCompletion(voice);
+        }
         if (voice.buffer) {
             voice.buffer->Stop();
         }
@@ -499,6 +864,38 @@ void StopAndReleaseVoices(std::vector<Voice>& voices) {
         }
     }
     voices.clear();
+}
+
+void StopVoicesByOwner(
+    std::vector<Voice>& voices,
+    int ownerGroup
+) {
+    voices.erase(
+        std::remove_if(
+            voices.begin(),
+            voices.end(),
+            [&](Voice& voice) {
+                const int voiceGroup = voice.isRuntimeEffect
+                    ? 2
+                    : (voice.vehicleSourceKey != 0 ? 1 : 0);
+                if (voiceGroup != ownerGroup) {
+                    return false;
+                }
+                PublishCompletion(voice);
+                if (voice.buffer) {
+                    voice.buffer->Stop();
+                }
+                if (voice.spatialBuffer) {
+                    voice.spatialBuffer->Release();
+                }
+                if (voice.buffer) {
+                    voice.buffer->Release();
+                }
+                return true;
+            }
+        ),
+        voices.end()
+    );
 }
 
 bool IsGamePaused() {
@@ -665,6 +1062,7 @@ void UpdateVoicePositions(std::vector<Voice>& voices) {
         }
         const auto relative =
             TransformWorldPosition(transform, voice.worldPosition);
+        voice.relativePosition = relative;
         voice.spatialBuffer->SetPosition(
             relative.x,
             relative.y,
@@ -678,6 +1076,18 @@ void UpdateVoicePositions(std::vector<Voice>& voices) {
             GetDistanceAttenuation(
                 Magnitude(relative) / voice.rollOffFactor
             );
+        if (voice.vehicleSourceKey != 0 && voice.sampleRate != 0) {
+            const auto frequency = static_cast<DWORD>(std::clamp(
+                static_cast<double>(voice.sampleRate) *
+                    std::max(
+                        voice.playbackSpeed * voice.dopplerScale,
+                        0.05f
+                    ),
+                static_cast<double>(DSBFREQUENCY_MIN),
+                static_cast<double>(DSBFREQUENCY_MAX)
+            ));
+            voice.buffer->SetFrequency(frequency);
+        }
     }
 }
 
@@ -932,7 +1342,7 @@ void ProcessMinigunJob(
             return value.key == job.sourceKey;
         }
     );
-    const auto now = GetTickCount();
+    const auto now = GetTickCount64();
     if (source != sources.end() &&
         source->job.minigunMode == job.minigunMode) {
         source->lastHeartbeat = now;
@@ -1005,7 +1415,7 @@ void UpdateMinigunSources(
 ) {
     constexpr DWORD kStopDelayMs = 300;
     constexpr std::int16_t kMinigunStopSoundId = 63;
-    const auto now = GetTickCount();
+    const auto now = GetTickCount64();
     for (auto source = sources.begin(); source != sources.end();) {
         if (now - source->lastHeartbeat <= kStopDelayMs) {
             ++source;
@@ -1118,6 +1528,894 @@ void ProcessBulletHit(
     );
 }
 
+VehicleBank* GetVehicleBank(
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
+    const std::string& lookupPath,
+    const std::string& archivePath,
+    std::int16_t bankId
+) {
+    if (bankId < 0) {
+        return nullptr;
+    }
+    auto& entry = banks[bankId];
+    if (!entry) {
+        entry = std::make_unique<VehicleBank>();
+    }
+    if (!entry->loadAttempted) {
+        entry->loadAttempted = true;
+        std::string error;
+        const auto thread = GetCurrentThread();
+        const auto previousPriority = GetThreadPriority(thread);
+        if (previousPriority != THREAD_PRIORITY_ERROR_RETURN) {
+            SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL);
+        }
+        entry->loaded = entry->samples.Load(
+            lookupPath,
+            archivePath,
+            static_cast<std::size_t>(bankId),
+            error
+        );
+        if (entry->loaded) {
+            ApplyDynamicOverrides(bankId, entry->samples);
+        }
+        if (previousPriority != THREAD_PRIORITY_ERROR_RETURN) {
+            SetThreadPriority(thread, previousPriority);
+        }
+    }
+    return entry->loaded ? entry.get() : nullptr;
+}
+
+VehicleBank* GetDialogueBank(
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
+    const std::string& gameDirectory,
+    const std::string& lookupPath,
+    std::int16_t bankId
+) {
+    if (bankId < 0) {
+        return nullptr;
+    }
+    auto& entry = banks[bankId];
+    if (!entry) {
+        entry = std::make_unique<VehicleBank>();
+    }
+    if (!entry->loadAttempted) {
+        entry->loadAttempted = true;
+        std::string error;
+        const auto thread = GetCurrentThread();
+        const auto previousPriority = GetThreadPriority(thread);
+        if (previousPriority != THREAD_PRIORITY_ERROR_RETURN) {
+            SetThreadPriority(thread, THREAD_PRIORITY_BELOW_NORMAL);
+        }
+        const auto packId = GetPackIdForBank(bankId);
+        const auto* packName = GetPackName(packId);
+        std::string archivePath;
+        AcquireSRWLockShared(&gOverrideLock);
+        if (packId == 1 && !gArchiveOverridePath.empty()) {
+            archivePath = gArchiveOverridePath;
+        } else if (packId >= 0 &&
+            packId < static_cast<int>(gPackOverridePaths.size())) {
+            archivePath = gPackOverridePaths[packId];
+        }
+        ReleaseSRWLockShared(&gOverrideLock);
+        if (archivePath.empty() && packName) {
+            archivePath = gameDirectory + "\\audio\\SFX\\" + packName;
+        }
+        entry->loaded = !archivePath.empty() && entry->samples.Load(
+            lookupPath,
+            archivePath,
+            static_cast<std::size_t>(bankId),
+            error
+        );
+        if (entry->loaded) {
+            ApplyDynamicOverrides(bankId, entry->samples);
+        }
+        if (previousPriority != THREAD_PRIORITY_ERROR_RETURN) {
+            SetThreadPriority(thread, previousPriority);
+        }
+    }
+    return entry->loaded ? entry.get() : nullptr;
+}
+
+Voice* FindVehicleVoice(
+    std::vector<Voice>& voices,
+    std::uintptr_t sourceKey
+) {
+    const auto found = std::find_if(
+        voices.begin(),
+        voices.end(),
+        [sourceKey](const Voice& voice) {
+            return voice.vehicleSourceKey == sourceKey;
+        }
+    );
+    return found != voices.end() ? &*found : nullptr;
+}
+
+std::vector<Voice>::iterator FindQuietestStatefulVoice(
+    std::vector<Voice>& voices
+) {
+    auto quietest = voices.end();
+    for (auto voice = voices.begin(); voice != voices.end(); ++voice) {
+        if (!voice->isStatefulEffect) {
+            continue;
+        }
+        if (quietest == voices.end() ||
+            voice->mixVolumeDb < quietest->mixVolumeDb) {
+            quietest = voice;
+        }
+    }
+    return quietest;
+}
+
+void StopVehicleVoice(
+    std::vector<Voice>& voices,
+    std::uintptr_t sourceKey
+) {
+    if (auto* voice = FindVehicleVoice(voices, sourceKey);
+        voice && voice->buffer) {
+        voice->buffer->Stop();
+    }
+}
+
+bool CreateVehicleVoice(
+    IDirectSound8* directSound,
+    VehicleBank& bank,
+    std::vector<Voice>& voices,
+    const AudioJob& job,
+    float listenerVolume
+) {
+    const auto* sample = bank.samples.Get(job.drySoundId);
+    if (!sample || sample->pcm.empty()) {
+        return false;
+    }
+
+    const bool hasLoop =
+        sample->loopStartSample >= 0 &&
+        (job.type == AudioJobType::VehicleUpdate ||
+         job.type == AudioJobType::StatefulStart);
+    const bool delayedLoop = hasLoop && sample->loopStartSample > 0;
+    const bool runtimeVoice =
+        job.type == AudioJobType::DialogueStart ||
+        job.type == AudioJobType::StatefulStart ||
+        job.type == AudioJobType::GenericOneShot;
+    auto priority = listenerVolume;
+    if (job.isFrontEnd) {
+        priority += 24.0f;
+    }
+    if (hasLoop) {
+        priority += 6.0f;
+    }
+    if (job.type == AudioJobType::DialogueStart ||
+        job.type == AudioJobType::StatefulStart) {
+        priority += 10.0f;
+    }
+    if (!ReserveVoiceSlot(
+            voices,
+            runtimeVoice
+                ? VoiceGroup::Runtime
+                : VoiceGroup::Vehicles,
+            priority
+        )) {
+        return false;
+    }
+    IDirectSoundBuffer* buffer{};
+    auto& base =
+        bank.baseBuffers[static_cast<std::size_t>(job.drySoundId)];
+    if (!EnsureBaseBuffer(directSound, *sample, base) ||
+        FAILED(directSound->DuplicateSoundBuffer(base, &buffer))) {
+        if (base) {
+            base->Release();
+            base = nullptr;
+        }
+        return false;
+    }
+
+    IDirectSound3DBuffer* spatialBuffer{};
+    if (FAILED(buffer->QueryInterface(
+            IID_IDirectSound3DBuffer,
+            reinterpret_cast<void**>(&spatialBuffer)
+        )) || !spatialBuffer) {
+        buffer->Release();
+        return false;
+    }
+
+    const auto frequency = static_cast<DWORD>(std::clamp(
+        static_cast<double>(sample->sampleRate) *
+            std::max(job.baseSpeed, 0.05f),
+        static_cast<double>(DSBFREQUENCY_MIN),
+        static_cast<double>(DSBFREQUENCY_MAX)
+    ));
+    buffer->SetFrequency(frequency);
+    buffer->SetVolume(static_cast<LONG>(
+        std::clamp(listenerVolume, -100.0f, 0.0f) * 100.0f
+    ));
+    if (job.startPercentage && job.playTime > 0) {
+        DSBCAPS capabilities{};
+        capabilities.dwSize = sizeof(capabilities);
+        if (SUCCEEDED(buffer->GetCaps(&capabilities))) {
+            auto position = static_cast<DWORD>(
+                static_cast<std::uint64_t>(capabilities.dwBufferBytes) *
+                static_cast<std::uint16_t>(job.playTime) /
+                100u
+            );
+            position &= ~1u;
+            if (position < capabilities.dwBufferBytes) {
+                buffer->SetCurrentPosition(position);
+            }
+        }
+    } else {
+        buffer->SetCurrentPosition(0);
+    }
+    spatialBuffer->SetMode(
+        job.isFrontEnd ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
+        DS3D_IMMEDIATE
+    );
+    spatialBuffer->SetMinDistance(1.0f, DS3D_IMMEDIATE);
+    spatialBuffer->SetMaxDistance(10000.0f, DS3D_IMMEDIATE);
+    spatialBuffer->SetPosition(
+        job.relativePosition.x,
+        job.isFrontEnd && job.relativePosition.y == 0.0f
+            ? 1.0f
+            : job.relativePosition.y,
+        job.relativePosition.z,
+        DS3D_IMMEDIATE
+    );
+
+    Voice voice{};
+    voice.buffer = buffer;
+    voice.spatialBuffer = spatialBuffer;
+    voice.mixVolumeDb = listenerVolume - job.effectsGainDb;
+    voice.outputGainDb = job.effectsGainDb;
+    voice.pendingStart = true;
+    voice.soundId = job.drySoundId;
+    voice.headroomDb = static_cast<float>(sample->headroom) / 100.0f;
+    voice.worldPosition = job.worldPosition;
+    voice.relativePosition = job.relativePosition;
+    voice.sourceVolumeDb = job.defaultVolumeDb;
+    voice.rollOffFactor = job.baseRollOffFactor;
+    voice.followsCamera = !job.isFrontEnd;
+    voice.isFrontEnd = job.isFrontEnd;
+    voice.isUnpausable = job.isUnpausable;
+    voice.looping = hasLoop && !delayedLoop;
+    voice.vehicleSourceKey = job.sourceKey;
+    voice.isVehicleOneShot =
+        job.type == AudioJobType::VehicleOneShot ||
+        job.type == AudioJobType::GenericOneShot;
+    voice.vehicleGeneration = job.sourceGeneration;
+    voice.sampleRate = sample->sampleRate;
+    voice.playbackSpeed = job.baseSpeed;
+    voice.dopplerScale = job.dopplerScale;
+    voice.vehicleBankId = job.bankId;
+    voice.vehicleLoopPending = delayedLoop;
+    voice.isRuntimeEffect = runtimeVoice;
+    voice.isStatefulEffect =
+        job.type == AudioJobType::StatefulStart;
+    voice.reportsCompletion =
+        job.type == AudioJobType::DialogueStart ||
+        job.type == AudioJobType::StatefulStart;
+    voices.push_back(voice);
+    return true;
+}
+
+void ContinueVehicleLoops(
+    IDirectSound8* directSound,
+    const std::string& lookupPath,
+    const std::string& archivePath,
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
+    std::vector<Voice>& voices
+) {
+    for (auto& voice : voices) {
+        if (!voice.vehicleLoopPending ||
+            voice.pendingStart ||
+            voice.suspended ||
+            !voice.buffer) {
+            continue;
+        }
+        DWORD status{};
+        if (FAILED(voice.buffer->GetStatus(&status)) ||
+            (status & DSBSTATUS_PLAYING)) {
+            continue;
+        }
+        auto* bank = GetVehicleBank(
+            banks,
+            lookupPath,
+            archivePath,
+            voice.vehicleBankId
+        );
+        const auto* sample = bank
+            ? bank->samples.Get(voice.soundId)
+            : nullptr;
+        if (!sample || sample->loopStartSample <= 0) {
+            voice.vehicleLoopPending = false;
+            continue;
+        }
+        const auto loopByte =
+            static_cast<std::size_t>(sample->loopStartSample) * 2;
+        if (loopByte >= sample->pcm.size()) {
+            voice.vehicleLoopPending = false;
+            continue;
+        }
+        OriginalPcmSample loopSample = *sample;
+        loopSample.pcm.assign(
+            sample->pcm.begin() + loopByte,
+            sample->pcm.end()
+        );
+        loopSample.loopStartSample = 0;
+        IDirectSoundBuffer* loopBuffer{};
+        if (!CreateBaseBuffer(directSound, loopSample, &loopBuffer)) {
+            voice.vehicleLoopPending = false;
+            continue;
+        }
+        IDirectSound3DBuffer* loopSpatial{};
+        if (FAILED(loopBuffer->QueryInterface(
+                IID_IDirectSound3DBuffer,
+                reinterpret_cast<void**>(&loopSpatial)
+            )) || !loopSpatial) {
+            loopBuffer->Release();
+            voice.vehicleLoopPending = false;
+            continue;
+        }
+        voice.spatialBuffer->Release();
+        voice.buffer->Release();
+        voice.buffer = loopBuffer;
+        voice.spatialBuffer = loopSpatial;
+        voice.looping = true;
+        voice.pendingStart = true;
+        voice.vehicleLoopPending = false;
+        loopBuffer->SetFrequency(static_cast<DWORD>(std::clamp(
+            static_cast<double>(voice.sampleRate) *
+                std::max(
+                    voice.playbackSpeed * voice.dopplerScale,
+                    0.05f
+                ),
+            static_cast<double>(DSBFREQUENCY_MIN),
+            static_cast<double>(DSBFREQUENCY_MAX)
+        )));
+        loopSpatial->SetMode(
+            voice.isFrontEnd
+                ? DS3DMODE_HEADRELATIVE
+                : DS3DMODE_NORMAL,
+            DS3D_IMMEDIATE
+        );
+        loopSpatial->SetMinDistance(1.0f, DS3D_IMMEDIATE);
+        loopSpatial->SetMaxDistance(10000.0f, DS3D_IMMEDIATE);
+        loopSpatial->SetPosition(
+            voice.worldPosition.x,
+            voice.isFrontEnd && voice.worldPosition.y == 0.0f
+                ? 1.0f
+                : voice.worldPosition.y,
+            voice.worldPosition.z,
+            DS3D_IMMEDIATE
+        );
+    }
+}
+
+void ProcessVehicleJob(
+    std::unordered_map<std::uintptr_t, VehicleSource>& sources,
+    std::vector<Voice>& voices,
+    const AudioJob& job
+) {
+    if (job.type == AudioJobType::VehicleStop) {
+        StopVehicleVoice(voices, job.sourceKey);
+        sources.erase(job.sourceKey);
+        return;
+    }
+    auto& source = sources[job.sourceKey];
+    source.job = job;
+    source.lastHeartbeat = GetTickCount64();
+}
+
+void ProcessVehicleOneShot(
+    IDirectSound8* directSound,
+    const std::string& lookupPath,
+    const std::string& archivePath,
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
+    std::vector<Voice>& voices,
+    const AudioJob& job
+) {
+    constexpr std::size_t kMaximumVehicleOneShots = 48;
+    if (std::count_if(
+            voices.begin(),
+            voices.end(),
+            [](const Voice& voice) {
+                return voice.isVehicleOneShot;
+            }
+        ) >= kMaximumVehicleOneShots) {
+        return;
+    }
+    auto* bank = GetVehicleBank(
+        banks,
+        lookupPath,
+        archivePath,
+        job.bankId
+    );
+    const auto* sample = bank ? bank->samples.Get(job.drySoundId) : nullptr;
+    if (!bank || !sample) {
+        return;
+    }
+    const auto volume =
+        job.defaultVolumeDb +
+        GetDirectionalMikeAttenuation(job.relativePosition) +
+        GetDistanceAttenuation(
+            Magnitude(job.relativePosition) / job.baseRollOffFactor
+        );
+    if (volume <= -100.0f) {
+        return;
+    }
+    const auto listenerVolume =
+        volume -
+        static_cast<float>(sample->headroom) / 100.0f +
+        job.effectsGainDb;
+    CreateVehicleVoice(
+        directSound,
+        *bank,
+        voices,
+        job,
+        listenerVolume
+    );
+}
+
+void ProcessDialogueJob(
+    IDirectSound8* directSound,
+    const std::string& gameDirectory,
+    const std::string& lookupPath,
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
+    std::vector<Voice>& voices,
+    std::unordered_map<std::uintptr_t, VirtualRuntimeSource>& virtualSources,
+    const AudioJob& job
+) {
+    auto* voice = FindVehicleVoice(voices, job.sourceKey);
+    if (job.type == AudioJobType::DialogueStop ||
+        job.type == AudioJobType::StatefulStop) {
+        virtualSources.erase(job.sourceKey);
+        if (voice && voice->buffer) {
+            voice->buffer->Stop();
+        }
+        return;
+    }
+    if (job.type == AudioJobType::DialogueUpdate ||
+        job.type == AudioJobType::StatefulUpdate) {
+        const auto virtualSource = virtualSources.find(job.sourceKey);
+        if (virtualSource != virtualSources.end() &&
+            virtualSource->second.job.sourceGeneration ==
+                job.sourceGeneration) {
+            const auto now = GetTickCount64();
+            auto& state = virtualSource->second;
+            state.playPositionMs +=
+                static_cast<double>(now - state.lastUpdateAt) *
+                std::max(static_cast<double>(state.job.baseSpeed), 0.05);
+            if (state.looping && state.durationMs != 0) {
+                state.playPositionMs = std::fmod(
+                    state.playPositionMs,
+                    static_cast<double>(state.durationMs)
+                );
+            }
+            state.lastUpdateAt = now;
+            const auto type = virtualSource->second.job.type;
+            virtualSource->second.job = job;
+            virtualSource->second.job.type = type;
+        }
+        if (voice &&
+            voice->vehicleGeneration == job.sourceGeneration) {
+            voice->worldPosition = job.worldPosition;
+            voice->relativePosition = job.relativePosition;
+            voice->sourceVolumeDb = job.defaultVolumeDb;
+            voice->rollOffFactor = job.baseRollOffFactor;
+            voice->outputGainDb = job.effectsGainDb;
+            voice->playbackSpeed = job.baseSpeed;
+            voice->dopplerScale = job.dopplerScale;
+        }
+        return;
+    }
+
+    if (job.type == AudioJobType::GenericOneShot &&
+        std::count_if(
+            voices.begin(),
+            voices.end(),
+            [](const Voice& candidate) {
+                return candidate.isRuntimeEffect &&
+                       !candidate.reportsCompletion;
+            }
+        ) >= 64) {
+        return;
+    }
+
+    virtualSources.erase(job.sourceKey);
+    if (voice && voice->buffer) {
+        voice->buffer->Stop();
+        CleanupVoices(voices);
+    }
+    auto* bank = GetDialogueBank(
+        banks,
+        gameDirectory,
+        lookupPath,
+        job.bankId
+    );
+    const auto* sample = bank ? bank->samples.Get(job.drySoundId) : nullptr;
+    if (!bank || !sample) {
+        if (job.type == AudioJobType::DialogueStart ||
+            job.type == AudioJobType::StatefulStart) {
+            PublishCompletion(job);
+        }
+        return;
+    }
+    const auto spatialVolume = job.isFrontEnd
+        ? job.defaultVolumeDb
+        : job.defaultVolumeDb +
+            GetDirectionalMikeAttenuation(job.relativePosition) +
+            GetDistanceAttenuation(
+                Magnitude(job.relativePosition) / job.baseRollOffFactor
+            );
+    const auto listenerVolume =
+        spatialVolume -
+        static_cast<float>(sample->headroom) / 100.0f +
+        job.effectsGainDb;
+    if ((job.type == AudioJobType::DialogueStart ||
+         job.type == AudioJobType::StatefulStart) &&
+        listenerVolume <= -100.0f) {
+        const auto samples = sample->pcm.size() / sizeof(std::int16_t);
+        const auto duration = sample->sampleRate != 0
+            ? static_cast<double>(samples) * 1000.0 /
+                static_cast<double>(sample->sampleRate)
+            : 0.0;
+        const auto durationMs = static_cast<DWORD>(std::clamp(
+            duration,
+            0.0,
+            static_cast<double>(MAXDWORD)
+        ));
+        virtualSources[job.sourceKey] = {
+            job,
+            GetTickCount64(),
+            durationMs,
+            job.startPercentage && durationMs != 0
+                ? static_cast<double>(durationMs) *
+                    static_cast<std::uint16_t>(job.playTime) / 100.0
+                : 0.0,
+            job.type == AudioJobType::StatefulStart &&
+                sample->loopStartSample >= 0
+        };
+        PublishDialogueStarted(job, *sample);
+        return;
+    }
+    if (job.type == AudioJobType::StatefulStart) {
+        constexpr std::size_t kMaximumStatefulEffects = 64;
+        const auto count = std::count_if(
+            voices.begin(),
+            voices.end(),
+            [](const Voice& candidate) {
+                return candidate.isStatefulEffect;
+            }
+        );
+        if (count >= kMaximumStatefulEffects) {
+            const auto quietest = FindQuietestStatefulVoice(voices);
+            if (quietest == voices.end() ||
+                !quietest->isStatefulEffect ||
+                quietest->mixVolumeDb >= listenerVolume) {
+                PublishCompletion(job);
+                return;
+            }
+            if (quietest->buffer) {
+                quietest->buffer->Stop();
+            }
+            CleanupVoices(voices);
+        }
+    }
+    if (!CreateVehicleVoice(
+            directSound,
+            *bank,
+            voices,
+            job,
+            listenerVolume
+        )) {
+        if (job.type == AudioJobType::DialogueStart ||
+            job.type == AudioJobType::StatefulStart) {
+            PublishCompletion(job);
+        }
+    } else if (job.type == AudioJobType::DialogueStart ||
+               job.type == AudioJobType::StatefulStart) {
+        PublishDialogueStarted(job, *sample);
+    }
+}
+
+void VirtualizeRuntimeVoices(
+    std::vector<Voice>& voices,
+    std::unordered_map<std::uintptr_t, VirtualRuntimeSource>& sources,
+    bool force
+) {
+    const auto now = GetTickCount64();
+    for (auto voice = voices.begin(); voice != voices.end();) {
+        if (!voice->isRuntimeEffect ||
+            !voice->reportsCompletion ||
+            !voice->buffer ||
+            (!force && voice->mixVolumeDb > -100.0f)) {
+            ++voice;
+            continue;
+        }
+
+        DSBCAPS capabilities{};
+        capabilities.dwSize = sizeof(capabilities);
+        DWORD playCursor{};
+        DWORD durationMs{};
+        DWORD cursorMs{};
+        if (voice->sampleRate != 0 &&
+            SUCCEEDED(voice->buffer->GetCaps(&capabilities)) &&
+            SUCCEEDED(voice->buffer->GetCurrentPosition(
+                &playCursor,
+                nullptr
+            ))) {
+            durationMs = static_cast<DWORD>(
+                static_cast<std::uint64_t>(capabilities.dwBufferBytes) *
+                1000 /
+                (static_cast<std::uint64_t>(voice->sampleRate) * 2)
+            );
+            cursorMs = static_cast<DWORD>(
+                static_cast<std::uint64_t>(playCursor) * 1000 /
+                (static_cast<std::uint64_t>(voice->sampleRate) * 2)
+            );
+        }
+
+        AudioJob job{};
+        job.type = voice->isStatefulEffect
+            ? AudioJobType::StatefulStart
+            : AudioJobType::DialogueStart;
+        job.drySoundId = voice->soundId;
+        job.relativePosition = voice->relativePosition;
+        job.worldPosition = voice->worldPosition;
+        job.defaultVolumeDb = voice->sourceVolumeDb;
+        job.baseRollOffFactor = voice->rollOffFactor;
+        job.baseSpeed = voice->playbackSpeed;
+        job.effectsGainDb = voice->outputGainDb;
+        job.sourceKey = voice->vehicleSourceKey;
+        job.sourceGeneration = voice->vehicleGeneration;
+        job.bankId = voice->vehicleBankId;
+        job.dopplerScale = voice->dopplerScale;
+        job.isFrontEnd = voice->isFrontEnd;
+        job.isUnpausable = voice->isUnpausable;
+        sources[job.sourceKey] = {
+            job,
+            now,
+            durationMs,
+            static_cast<double>(cursorMs),
+            voice->isStatefulEffect &&
+                (voice->looping || voice->vehicleLoopPending)
+        };
+
+        voice->buffer->Stop();
+        if (voice->spatialBuffer) {
+            voice->spatialBuffer->Release();
+        }
+        voice->buffer->Release();
+        voice = voices.erase(voice);
+    }
+}
+
+void UpdateVirtualRuntimeSources(
+    IDirectSound8* directSound,
+    const std::string& gameDirectory,
+    const std::string& lookupPath,
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
+    std::vector<Voice>& voices,
+    std::unordered_map<std::uintptr_t, VirtualRuntimeSource>& sources
+) {
+    constexpr float kMaterializeThresholdDb = -96.0f;
+    const auto now = GetTickCount64();
+    for (auto source = sources.begin(); source != sources.end();) {
+        auto& state = source->second;
+        state.playPositionMs +=
+            static_cast<double>(now - state.lastUpdateAt) *
+            std::max(static_cast<double>(state.job.baseSpeed), 0.05);
+        state.lastUpdateAt = now;
+        if (state.looping && state.durationMs != 0) {
+            state.playPositionMs = std::fmod(
+                state.playPositionMs,
+                static_cast<double>(state.durationMs)
+            );
+        }
+        if (!state.looping && state.durationMs != 0 &&
+            state.playPositionMs >= state.durationMs) {
+            PublishCompletion(state.job);
+            source = sources.erase(source);
+            continue;
+        }
+
+        auto* bank = GetDialogueBank(
+            banks,
+            gameDirectory,
+            lookupPath,
+            state.job.bankId
+        );
+        const auto* sample =
+            bank ? bank->samples.Get(state.job.drySoundId) : nullptr;
+        if (!bank || !sample) {
+            PublishCompletion(state.job);
+            source = sources.erase(source);
+            continue;
+        }
+        const auto spatialVolume = state.job.isFrontEnd
+            ? state.job.defaultVolumeDb
+            : state.job.defaultVolumeDb +
+                GetDirectionalMikeAttenuation(
+                    state.job.relativePosition
+                ) +
+                GetDistanceAttenuation(
+                    Magnitude(state.job.relativePosition) /
+                    state.job.baseRollOffFactor
+                );
+        const auto listenerVolume =
+            spatialVolume -
+            static_cast<float>(sample->headroom) / 100.0f +
+            state.job.effectsGainDb;
+        if (listenerVolume <= kMaterializeThresholdDb) {
+            ++source;
+            continue;
+        }
+        if (state.job.type == AudioJobType::StatefulStart) {
+            constexpr std::size_t kMaximumStatefulEffects = 64;
+            const auto count = std::count_if(
+                voices.begin(),
+                voices.end(),
+                [](const Voice& voice) {
+                    return voice.isStatefulEffect;
+                }
+            );
+            if (count >= kMaximumStatefulEffects) {
+                const auto quietest =
+                    FindQuietestStatefulVoice(voices);
+                if (quietest == voices.end() ||
+                    !quietest->isStatefulEffect ||
+                    quietest->mixVolumeDb >= listenerVolume) {
+                    ++source;
+                    continue;
+                }
+                if (quietest->buffer) {
+                    quietest->buffer->Stop();
+                }
+                CleanupVoices(voices);
+            }
+        }
+
+        AudioJob resumed = state.job;
+        if (state.durationMs != 0) {
+            resumed.startPercentage = true;
+            resumed.playTime = static_cast<std::int16_t>(
+                std::min<double>(
+                    99,
+                    state.playPositionMs * 100.0 / state.durationMs
+                )
+            );
+        }
+        if (!CreateVehicleVoice(
+                directSound,
+                *bank,
+                voices,
+                resumed,
+                listenerVolume
+            )) {
+            ++source;
+            continue;
+        }
+        source = sources.erase(source);
+    }
+}
+
+void UpdateVehicleSources(
+    IDirectSound8* directSound,
+    const std::string& lookupPath,
+    const std::string& archivePath,
+    std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
+    std::unordered_map<std::uintptr_t, VehicleSource>& sources,
+    std::vector<Voice>& voices
+) {
+    constexpr DWORD kSourceTimeoutMs = 250;
+    constexpr std::size_t kMaximumVehicleVoices = 40;
+    const auto now = GetTickCount64();
+    for (auto source = sources.begin(); source != sources.end();) {
+        if (now - source->second.lastHeartbeat <= kSourceTimeoutMs) {
+            ++source;
+            continue;
+        }
+        StopVehicleVoice(voices, source->first);
+        source = sources.erase(source);
+    }
+
+    struct Candidate {
+        float volume;
+        VehicleSource* source;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(sources.size());
+    for (auto& [key, source] : sources) {
+        const auto& job = source.job;
+        const auto volume =
+            job.defaultVolumeDb +
+            GetDirectionalMikeAttenuation(job.relativePosition) +
+            GetDistanceAttenuation(
+                Magnitude(job.relativePosition) / job.baseRollOffFactor
+            );
+        const auto* voice = FindVehicleVoice(voices, job.sourceKey);
+        const auto threshold =
+            voice && voice->vehicleGeneration == job.sourceGeneration
+                ? -100.0f
+                : -96.0f;
+        if (volume > threshold) {
+            candidates.push_back({volume, &source});
+        }
+    }
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [](const Candidate& left, const Candidate& right) {
+            return left.volume > right.volume;
+        }
+    );
+    if (candidates.size() > kMaximumVehicleVoices) {
+        candidates.resize(kMaximumVehicleVoices);
+    }
+
+    for (auto& [key, source] : sources) {
+        const bool selected = std::any_of(
+            candidates.begin(),
+            candidates.end(),
+            [&](const Candidate& candidate) {
+                return candidate.source == &source;
+            }
+        );
+        if (!selected) {
+            StopVehicleVoice(voices, key);
+        }
+    }
+
+    for (const auto& candidate : candidates) {
+        auto& source = *candidate.source;
+        const auto& job = source.job;
+        auto* bank = GetVehicleBank(
+            banks,
+            lookupPath,
+            archivePath,
+            job.bankId
+        );
+        if (!bank) {
+            continue;
+        }
+        const auto* sample = bank->samples.Get(job.drySoundId);
+        if (!sample) {
+            continue;
+        }
+        const auto listenerVolume =
+            candidate.volume -
+            static_cast<float>(sample->headroom) / 100.0f +
+            job.effectsGainDb;
+        auto* voice = FindVehicleVoice(voices, job.sourceKey);
+        if (voice &&
+            voice->vehicleGeneration == job.sourceGeneration &&
+            voice->soundId == job.drySoundId) {
+            voice->worldPosition = job.worldPosition;
+            voice->sourceVolumeDb = job.defaultVolumeDb;
+            voice->rollOffFactor = job.baseRollOffFactor;
+            voice->outputGainDb = job.effectsGainDb;
+            voice->playbackSpeed = job.baseSpeed;
+            voice->dopplerScale = job.dopplerScale;
+            continue;
+        }
+        if (voice && voice->buffer) {
+            voice->buffer->Stop();
+            CleanupVoices(voices);
+        }
+        if (sample->loopStartSample < 0 &&
+            source.lastStartedGeneration == job.sourceGeneration) {
+            continue;
+        }
+        if (CreateVehicleVoice(
+                directSound,
+                *bank,
+                voices,
+                job,
+                listenerVolume
+            )) {
+            source.lastStartedGeneration = job.sourceGeneration;
+        }
+    }
+}
+
 bool InitialiseListener(
     IDirectSound8* directSound,
     IDirectSound3DListener** output
@@ -1161,102 +2459,213 @@ bool InitialiseListener(
     return true;
 }
 
+bool CreateAudioDevice(
+    IDirectSound8** directSoundOutput,
+    IDirectSound3DListener** listenerOutput
+) {
+    auto* window = FindProcessWindow();
+    if (!window) {
+        return false;
+    }
+
+    IDirectSound8* directSound{};
+    if (FAILED(DirectSoundCreate8(nullptr, &directSound, nullptr))) {
+        return false;
+    }
+    if (FAILED(directSound->SetCooperativeLevel(
+            window,
+            DSSCL_NORMAL
+        ))) {
+        directSound->Release();
+        return false;
+    }
+
+    IDirectSound3DListener* listener{};
+    if (!InitialiseListener(directSound, &listener)) {
+        directSound->Release();
+        return false;
+    }
+
+    *directSoundOutput = directSound;
+    *listenerOutput = listener;
+    return true;
+}
+
+bool IsAudioDeviceHealthy(IDirectSound8* directSound) {
+    if (!directSound) {
+        return false;
+    }
+    DSCAPS capabilities{};
+    capabilities.dwSize = sizeof(capabilities);
+    return SUCCEEDED(directSound->GetCaps(&capabilities));
+}
+
+void ReleaseBaseBuffers(
+    std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& buffers
+) {
+    for (auto*& buffer : buffers) {
+        if (buffer) {
+            buffer->Release();
+            buffer = nullptr;
+        }
+    }
+}
+
 DWORD WINAPI BackendThread(void*) {
-    OriginalSoundBank weaponBank;
-    OriginalSoundBank bulletHitBank;
+    auto weaponBankStorage = std::make_unique<OriginalSoundBank>();
+    auto bulletHitBankStorage = std::make_unique<OriginalSoundBank>();
+    auto& weaponBank = *weaponBankStorage;
+    auto& bulletHitBank = *bulletHitBankStorage;
     std::string error;
     const auto gameDirectory = GetGameDirectory();
+    std::string activeArchivePath = gameDirectory + "\\audio\\SFX\\GENRL";
+    std::string activeLookupPath =
+        gameDirectory + "\\audio\\CONFIG\\BankLkup.dat";
     if (!weaponBank.Load(gameDirectory, kWeaponBankId, error) ||
         !bulletHitBank.Load(gameDirectory, kBulletHitBankId, error)) {
         return 1;
     }
 
     IDirectSound8* directSound{};
-    if (FAILED(DirectSoundCreate8(nullptr, &directSound, nullptr))) {
-        return 2;
-    }
-
-    HWND window{};
-    for (int attempt = 0; attempt < 100 && !window; ++attempt) {
-        window = FindProcessWindow();
-        if (!window) {
-            Sleep(50);
+    IDirectSound3DListener* listener{};
+    for (int attempt = 0;
+         attempt < 100 &&
+         !CreateAudioDevice(&directSound, &listener);
+         ++attempt) {
+        if (WaitForSingleObject(gStopEvent, 50) == WAIT_OBJECT_0) {
+            return 2;
         }
     }
-    if (!window ||
-        FAILED(directSound->SetCooperativeLevel(window, DSSCL_NORMAL))) {
-        directSound->Release();
+    if (!directSound || !listener) {
         return 3;
-    }
-
-    IDirectSound3DListener* listener{};
-    if (!InitialiseListener(directSound, &listener)) {
-        directSound->Release();
-        return 4;
     }
 
     std::array<IDirectSoundBuffer*, kMaxOriginalSounds> weaponBaseBuffers{};
     std::array<IDirectSoundBuffer*, kMaxOriginalSounds> bulletHitBaseBuffers{};
     std::vector<Voice> voices;
     std::vector<MinigunSource> minigunSources;
+    std::vector<AudioJob> coalescedJobs;
+    std::unordered_map<std::uintptr_t, VehicleSource> vehicleSources;
+    std::unordered_map<std::uintptr_t, VirtualRuntimeSource>
+        virtualRuntimeSources;
+    std::unordered_map<
+        std::int16_t,
+        std::unique_ptr<VehicleBank>
+    > vehicleBanks;
     voices.reserve(128);
     minigunSources.reserve(16);
+    coalescedJobs.reserve(1024);
+    vehicleSources.reserve(256);
+    virtualRuntimeSources.reserve(128);
+    vehicleBanks.reserve(64);
     gReady.store(true, std::memory_order_release);
 
     HANDLE waits[] = {gStopEvent, gWakeEvent};
     bool wasPaused{};
     bool replacementWasEnabled =
         gReplaceOriginal.load(std::memory_order_acquire);
+    bool vehicleReplacementWasEnabled =
+        gReplaceVehicles.load(std::memory_order_acquire);
+    bool dialogueReplacementWasEnabled =
+        gReplaceDialogues.load(std::memory_order_acquire);
+    auto nextDeviceHealthCheck = GetTickCount64() + 1000;
     while (WaitForMultipleObjects(2, waits, FALSE, 10) != WAIT_OBJECT_0) {
+        const auto deviceCheckTime = GetTickCount64();
+        const bool recoveryRequested =
+            gDeviceRecoveryRequested.exchange(
+                false,
+                std::memory_order_acq_rel
+            );
+        if (recoveryRequested ||
+            deviceCheckTime >= nextDeviceHealthCheck) {
+            nextDeviceHealthCheck = deviceCheckTime + 1000;
+            if (recoveryRequested ||
+                !IsAudioDeviceHealthy(directSound)) {
+                gReady.store(false, std::memory_order_release);
+                VirtualizeRuntimeVoices(
+                    voices,
+                    virtualRuntimeSources,
+                    true
+                );
+                StopAndReleaseVoices(voices, false);
+                minigunSources.clear();
+                ReleaseBaseBuffers(weaponBaseBuffers);
+                ReleaseBaseBuffers(bulletHitBaseBuffers);
+                ReleaseVehicleBanks(vehicleBanks);
+                if (listener) {
+                    listener->Release();
+                    listener = nullptr;
+                }
+                if (directSound) {
+                    directSound->Release();
+                    directSound = nullptr;
+                }
+
+                while (WaitForSingleObject(gStopEvent, 500) !=
+                       WAIT_OBJECT_0) {
+                    if (CreateAudioDevice(&directSound, &listener)) {
+                        gReady.store(true, std::memory_order_release);
+                        gDeviceRecoveryRequested.store(
+                            false,
+                            std::memory_order_release
+                        );
+                        nextDeviceHealthCheck =
+                            GetTickCount64() + 1000;
+                        break;
+                    }
+                }
+                if (!directSound || !listener) {
+                    break;
+                }
+            }
+        }
         std::string archiveOverride;
         std::string lookupOverride;
         if (TakeBankSourceUpdate(archiveOverride, lookupOverride)) {
-            const auto archivePath = archiveOverride.empty()
+            const auto requestedArchivePath = archiveOverride.empty()
                 ? gameDirectory + "\\audio\\SFX\\GENRL"
                 : archiveOverride;
-            const auto lookupPath = lookupOverride.empty()
+            const auto requestedLookupPath = lookupOverride.empty()
                 ? gameDirectory + "\\audio\\CONFIG\\BankLkup.dat"
                 : lookupOverride;
-            OriginalSoundBank updatedWeapons;
-            OriginalSoundBank updatedBulletHits;
+            auto updatedWeapons =
+                std::make_unique<OriginalSoundBank>();
+            auto updatedBulletHits =
+                std::make_unique<OriginalSoundBank>();
             error.clear();
-            if (updatedWeapons.Load(
-                    lookupPath,
-                    archivePath,
+            if (updatedWeapons->Load(
+                    requestedLookupPath,
+                    requestedArchivePath,
                     kWeaponBankId,
                     error
                 ) &&
-                updatedBulletHits.Load(
-                    lookupPath,
-                    archivePath,
+                updatedBulletHits->Load(
+                    requestedLookupPath,
+                    requestedArchivePath,
                     kBulletHitBankId,
                     error
                 )) {
                 ApplyCurrentOverrides(
                     RuntimeSoundBank::Weapons,
-                    updatedWeapons
+                    *updatedWeapons
                 );
                 ApplyCurrentOverrides(
                     RuntimeSoundBank::BulletHits,
-                    updatedBulletHits
+                    *updatedBulletHits
                 );
                 StopAndReleaseVoices(voices);
                 minigunSources.clear();
-                for (auto*& buffer : weaponBaseBuffers) {
-                    if (buffer) {
-                        buffer->Release();
-                        buffer = nullptr;
-                    }
-                }
-                for (auto*& buffer : bulletHitBaseBuffers) {
-                    if (buffer) {
-                        buffer->Release();
-                        buffer = nullptr;
-                    }
-                }
-                weaponBank = std::move(updatedWeapons);
-                bulletHitBank = std::move(updatedBulletHits);
+                ReleaseBaseBuffers(weaponBaseBuffers);
+                ReleaseBaseBuffers(bulletHitBaseBuffers);
+                weaponBank = std::move(*updatedWeapons);
+                bulletHitBank = std::move(*updatedBulletHits);
+                activeArchivePath = requestedArchivePath;
+                activeLookupPath = requestedLookupPath;
+                ReleaseVehicleBanks(vehicleBanks);
             }
+        }
+        if (TakeDynamicBankUpdate()) {
+            ReleaseVehicleBanks(vehicleBanks);
         }
         ApplyPendingOverrides(
             RuntimeSoundBank::Weapons,
@@ -1272,16 +2681,37 @@ DWORD WINAPI BackendThread(void*) {
             gReplaceOriginal.load(std::memory_order_acquire);
         if (replacementIsEnabled != replacementWasEnabled) {
             if (!replacementIsEnabled) {
-                StopAndReleaseVoices(voices);
+                StopVoicesByOwner(voices, 0);
                 minigunSources.clear();
             }
             replacementWasEnabled = replacementIsEnabled;
         }
+        const bool vehicleReplacementIsEnabled =
+            gReplaceVehicles.load(std::memory_order_acquire);
+        if (vehicleReplacementIsEnabled != vehicleReplacementWasEnabled) {
+            if (!vehicleReplacementIsEnabled) {
+                StopVoicesByOwner(voices, 1);
+                vehicleSources.clear();
+            }
+            vehicleReplacementWasEnabled = vehicleReplacementIsEnabled;
+        }
+        const bool dialogueReplacementIsEnabled =
+            gReplaceDialogues.load(std::memory_order_acquire);
+        if (dialogueReplacementIsEnabled != dialogueReplacementWasEnabled) {
+            if (!dialogueReplacementIsEnabled) {
+                StopVoicesByOwner(voices, 2);
+                virtualRuntimeSources.clear();
+            }
+            dialogueReplacementWasEnabled = dialogueReplacementIsEnabled;
+        }
 
         auto read = gRead.load(std::memory_order_relaxed);
         const auto write = gWrite.load(std::memory_order_acquire);
-        if (!replacementIsEnabled) {
+        if (!replacementIsEnabled &&
+            !vehicleReplacementIsEnabled &&
+            !dialogueReplacementIsEnabled) {
             gRead.store(write, std::memory_order_release);
+            ClearCoalescedJobs();
             CleanupVoices(voices);
             continue;
         }
@@ -1291,17 +2721,114 @@ DWORD WINAPI BackendThread(void*) {
                 SuspendVoices(voices);
                 wasPaused = true;
             }
-            // Discard shots accumulated while paused.
+            TakeCoalescedJobs(coalescedJobs);
+            for (const auto& job : coalescedJobs) {
+                if (job.type == AudioJobType::VehicleStop) {
+                    ProcessVehicleJob(vehicleSources, voices, job);
+                } else if (job.type == AudioJobType::DialogueStop ||
+                           job.type == AudioJobType::StatefulStop) {
+                    ProcessDialogueJob(
+                        directSound,
+                        gameDirectory,
+                        activeLookupPath,
+                        vehicleBanks,
+                        voices,
+                        virtualRuntimeSources,
+                        job
+                    );
+                }
+            }
+            const auto pausedAt = GetTickCount64();
+            for (auto& [key, source] : virtualRuntimeSources) {
+                source.lastUpdateAt = pausedAt;
+            }
+            while (read != write) {
+                const auto& job = gJobs[read];
+                if (dialogueReplacementIsEnabled &&
+                    (job.type == AudioJobType::DialogueStart ||
+                     job.type == AudioJobType::StatefulStart)) {
+                    ProcessDialogueJob(
+                        directSound,
+                        gameDirectory,
+                        activeLookupPath,
+                        vehicleBanks,
+                        voices,
+                        virtualRuntimeSources,
+                        job
+                    );
+                }
+                read = (read + 1) & kQueueMask;
+            }
             gRead.store(write, std::memory_order_release);
             continue;
         }
         if (wasPaused) {
             ResumeVoices(voices);
+            const auto resumedAt = GetTickCount64();
+            for (auto& [key, source] : virtualRuntimeSources) {
+                source.lastUpdateAt = resumedAt;
+            }
             wasPaused = false;
+        }
+        TakeCoalescedJobs(coalescedJobs);
+        for (const auto& job : coalescedJobs) {
+            if (job.type == AudioJobType::VehicleUpdate ||
+                job.type == AudioJobType::VehicleStop) {
+                if (vehicleReplacementIsEnabled) {
+                    ProcessVehicleJob(vehicleSources, voices, job);
+                }
+            } else if (dialogueReplacementIsEnabled) {
+                ProcessDialogueJob(
+                    directSound,
+                    gameDirectory,
+                    activeLookupPath,
+                    vehicleBanks,
+                    voices,
+                    virtualRuntimeSources,
+                    job
+                );
+            }
         }
         while (read != write) {
             const auto& job = gJobs[read];
-            if (job.type == AudioJobType::BulletHit) {
+            if (job.type == AudioJobType::DialogueStart ||
+                job.type == AudioJobType::DialogueUpdate ||
+                job.type == AudioJobType::DialogueStop ||
+                job.type == AudioJobType::StatefulStart ||
+                job.type == AudioJobType::StatefulUpdate ||
+                job.type == AudioJobType::StatefulStop ||
+                job.type == AudioJobType::GenericOneShot) {
+                if (dialogueReplacementIsEnabled) {
+                    ProcessDialogueJob(
+                        directSound,
+                        gameDirectory,
+                        activeLookupPath,
+                        vehicleBanks,
+                        voices,
+                        virtualRuntimeSources,
+                        job
+                    );
+                }
+            } else if (job.type == AudioJobType::VehicleOneShot) {
+                if (vehicleReplacementIsEnabled) {
+                    ProcessVehicleOneShot(
+                        directSound,
+                        activeLookupPath,
+                        activeArchivePath,
+                        vehicleBanks,
+                        voices,
+                        job
+                    );
+                }
+            } else if (job.type == AudioJobType::VehicleUpdate ||
+                       job.type == AudioJobType::VehicleStop) {
+                if (vehicleReplacementIsEnabled) {
+                    ProcessVehicleJob(vehicleSources, voices, job);
+                }
+            } else if (!replacementIsEnabled) {
+                read = (read + 1) & kQueueMask;
+                continue;
+            } else if (job.type == AudioJobType::BulletHit) {
                 ProcessBulletHit(
                     directSound,
                     bulletHitBank,
@@ -1330,36 +2857,69 @@ DWORD WINAPI BackendThread(void*) {
             read = (read + 1) & kQueueMask;
         }
         gRead.store(read, std::memory_order_release);
-        UpdateMinigunSources(
-            directSound,
-            weaponBank,
-            weaponBaseBuffers,
-            voices,
-            minigunSources
-        );
+        if (vehicleReplacementIsEnabled) {
+            ContinueVehicleLoops(
+                directSound,
+                activeLookupPath,
+                activeArchivePath,
+                vehicleBanks,
+                voices
+            );
+        }
         CleanupVoices(voices);
+        if (replacementIsEnabled) {
+            UpdateMinigunSources(
+                directSound,
+                weaponBank,
+                weaponBaseBuffers,
+                voices,
+                minigunSources
+            );
+        }
+        if (vehicleReplacementIsEnabled) {
+            UpdateVehicleSources(
+                directSound,
+                activeLookupPath,
+                activeArchivePath,
+                vehicleBanks,
+                vehicleSources,
+                voices
+            );
+        }
+        if (dialogueReplacementIsEnabled) {
+            UpdateVirtualRuntimeSources(
+                directSound,
+                gameDirectory,
+                activeLookupPath,
+                vehicleBanks,
+                voices,
+                virtualRuntimeSources
+            );
+        }
         UpdateVoicePositions(voices);
         UpdateVoiceEnvironment(voices);
+        if (dialogueReplacementIsEnabled) {
+            VirtualizeRuntimeVoices(
+                voices,
+                virtualRuntimeSources,
+                false
+            );
+        }
         RebalanceVoiceMixer(voices);
         StartPendingVoices(voices);
     }
 
     gReady.store(false, std::memory_order_release);
     StopAndReleaseVoices(voices);
-    for (auto*& buffer : weaponBaseBuffers) {
-        if (buffer) {
-            buffer->Release();
-            buffer = nullptr;
-        }
+    ReleaseBaseBuffers(weaponBaseBuffers);
+    ReleaseBaseBuffers(bulletHitBaseBuffers);
+    ReleaseVehicleBanks(vehicleBanks);
+    if (listener) {
+        listener->Release();
     }
-    for (auto*& buffer : bulletHitBaseBuffers) {
-        if (buffer) {
-            buffer->Release();
-            buffer = nullptr;
-        }
+    if (directSound) {
+        directSound->Release();
     }
-    listener->Release();
-    directSound->Release();
     return 0;
 }
 
@@ -1367,16 +2927,43 @@ DWORD WINAPI BackendThread(void*) {
 
 bool WeaponBackendStart(void* module) {
     gModule = static_cast<HMODULE>(module);
+    gReady.store(false, std::memory_order_release);
+    gDeviceRecoveryRequested.store(false, std::memory_order_release);
+    gWrite.store(0, std::memory_order_release);
+    gRead.store(0, std::memory_order_release);
+    ClearCoalescedJobs();
+    AcquireSRWLockExclusive(&gCoalescedJobLock);
+    gCoalescedJobs.reserve(1024);
+    ReleaseSRWLockExclusive(&gCoalescedJobLock);
+    AcquireSRWLockExclusive(&gCompletionLock);
+    gCompletions.clear();
+    ReleaseSRWLockExclusive(&gCompletionLock);
     gStopEvent = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     gWakeEvent = CreateEventA(nullptr, FALSE, FALSE, nullptr);
     if (!gStopEvent || !gWakeEvent) {
+        if (gWakeEvent) {
+            CloseHandle(gWakeEvent);
+            gWakeEvent = nullptr;
+        }
+        if (gStopEvent) {
+            CloseHandle(gStopEvent);
+            gStopEvent = nullptr;
+        }
         return false;
     }
     gThread = CreateThread(nullptr, 0, BackendThread, nullptr, 0, nullptr);
-    return gThread != nullptr;
+    if (!gThread) {
+        CloseHandle(gWakeEvent);
+        CloseHandle(gStopEvent);
+        gWakeEvent = nullptr;
+        gStopEvent = nullptr;
+        return false;
+    }
+    return true;
 }
 
 void WeaponBackendStop() {
+    gReady.store(false, std::memory_order_release);
     if (gStopEvent) {
         SetEvent(gStopEvent);
     }
@@ -1385,6 +2972,46 @@ void WeaponBackendStop() {
 bool WeaponBackendEnqueue(const AudioJob& job) {
     if (!gReady.load(std::memory_order_acquire)) {
         return false;
+    }
+    if (IsCoalescedSourceJob(job.type)) {
+        AcquireSRWLockExclusive(&gCoalescedJobLock);
+        const auto key = GetCoalescedJobKey(job);
+        const auto existing = std::find_if(
+            gCoalescedJobs.begin(),
+            gCoalescedJobs.end(),
+            [&](const AudioJob& queued) {
+                return GetCoalescedJobKey(queued) == key;
+            }
+        );
+        if (existing != gCoalescedJobs.end()) {
+            *existing = job;
+        } else if (gCoalescedJobs.size() < 1024) {
+            gCoalescedJobs.push_back(job);
+        } else if (job.type == AudioJobType::VehicleStop ||
+                   job.type == AudioJobType::DialogueStop ||
+                   job.type == AudioJobType::StatefulStop) {
+            const auto update = std::find_if(
+                gCoalescedJobs.begin(),
+                gCoalescedJobs.end(),
+                [](const AudioJob& queued) {
+                    return queued.type == AudioJobType::VehicleUpdate ||
+                           queued.type == AudioJobType::DialogueUpdate ||
+                           queued.type == AudioJobType::StatefulUpdate;
+                }
+            );
+            if (update != gCoalescedJobs.end()) {
+                *update = job;
+            } else {
+                ReleaseSRWLockExclusive(&gCoalescedJobLock);
+                return false;
+            }
+        } else {
+            ReleaseSRWLockExclusive(&gCoalescedJobLock);
+            return false;
+        }
+        ReleaseSRWLockExclusive(&gCoalescedJobLock);
+        SetEvent(gWakeEvent);
+        return true;
     }
     const auto write = gWrite.load(std::memory_order_relaxed);
     const auto next = (write + 1) & kQueueMask;
@@ -1413,6 +3040,50 @@ bool WeaponBackendIsEnabled() {
     return gReplaceOriginal.load(std::memory_order_acquire);
 }
 
+bool VehicleBackendShouldReplaceOriginal() {
+    return gReady.load(std::memory_order_acquire) &&
+           gReplaceVehicles.load(std::memory_order_acquire);
+}
+
+void VehicleBackendSetEnabled(bool enabled) {
+    gReplaceVehicles.store(enabled, std::memory_order_release);
+    if (gWakeEvent) {
+        SetEvent(gWakeEvent);
+    }
+}
+
+bool VehicleBackendEnqueue(const AudioJob& job) {
+    return WeaponBackendEnqueue(job);
+}
+
+bool DialogueBackendShouldReplaceOriginal() {
+    return gReady.load(std::memory_order_acquire) &&
+           gReplaceDialogues.load(std::memory_order_acquire);
+}
+
+void DialogueBackendSetEnabled(bool enabled) {
+    gReplaceDialogues.store(enabled, std::memory_order_release);
+    if (gWakeEvent) {
+        SetEvent(gWakeEvent);
+    }
+}
+
+bool DialogueBackendEnqueue(const AudioJob& job) {
+    return WeaponBackendEnqueue(job);
+}
+
+bool DialogueBackendPollCompletion(AudioCompletion& completion) {
+    AcquireSRWLockExclusive(&gCompletionLock);
+    if (gCompletions.empty()) {
+        ReleaseSRWLockExclusive(&gCompletionLock);
+        return false;
+    }
+    completion = gCompletions.front();
+    gCompletions.pop_front();
+    ReleaseSRWLockExclusive(&gCompletionLock);
+    return true;
+}
+
 bool WeaponBackendSetSampleOverride(
     RuntimeSoundBank bank,
     std::int16_t soundId,
@@ -1426,11 +3097,16 @@ bool WeaponBackendSetSampleOverride(
         return false;
     }
     const auto soundIndex = static_cast<std::size_t>(soundId);
+    bool changed{};
     AcquireSRWLockExclusive(&gOverrideLock);
-    gOverridePaths[bankIndex][soundIndex] = path;
-    gOverrideActions[bankIndex][soundIndex] = 1;
+    if (gOverridePaths[bankIndex][soundIndex] != path ||
+        gOverrideActions[bankIndex][soundIndex] != 1) {
+        gOverridePaths[bankIndex][soundIndex] = path;
+        gOverrideActions[bankIndex][soundIndex] = 1;
+        changed = true;
+    }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (gWakeEvent) {
+    if (changed && gWakeEvent) {
         SetEvent(gWakeEvent);
     }
     return true;
@@ -1447,11 +3123,75 @@ bool WeaponBackendClearSampleOverride(
         return false;
     }
     const auto soundIndex = static_cast<std::size_t>(soundId);
+    bool changed{};
     AcquireSRWLockExclusive(&gOverrideLock);
-    gOverridePaths[bankIndex][soundIndex].clear();
-    gOverrideActions[bankIndex][soundIndex] = -1;
+    if (!gOverridePaths[bankIndex][soundIndex].empty() ||
+        gOverrideActions[bankIndex][soundIndex] != -1) {
+        gOverridePaths[bankIndex][soundIndex].clear();
+        gOverrideActions[bankIndex][soundIndex] = -1;
+        changed = true;
+    }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (gWakeEvent) {
+    if (changed && gWakeEvent) {
+        SetEvent(gWakeEvent);
+    }
+    return true;
+}
+
+bool WeaponBackendSetDynamicSampleOverride(
+    std::int16_t bankId,
+    std::int16_t soundId,
+    const char* path,
+    bool installed
+) {
+    if (bankId < 0 || soundId < 0 ||
+        static_cast<std::size_t>(soundId) >= kMaxOriginalSounds ||
+        (installed && (!path || !*path))) {
+        return false;
+    }
+    bool changed{};
+    AcquireSRWLockExclusive(&gOverrideLock);
+    const auto key = GetDynamicOverrideKey(bankId, soundId);
+    if (installed) {
+        const auto found = gDynamicOverridePaths.find(key);
+        if (found == gDynamicOverridePaths.end() || found->second != path) {
+            gDynamicOverridePaths[key] = path;
+            changed = true;
+        }
+    } else {
+        changed = gDynamicOverridePaths.erase(key) != 0;
+    }
+    if (changed) {
+        gDynamicBanksDirty = true;
+    }
+    ReleaseSRWLockExclusive(&gOverrideLock);
+    if (changed && gWakeEvent) {
+        SetEvent(gWakeEvent);
+    }
+    return true;
+}
+
+bool WeaponBackendSetPackOverride(
+    std::int32_t packId,
+    const char* path,
+    bool installed
+) {
+    if (packId < 0 ||
+        packId >= static_cast<std::int32_t>(gPackOverridePaths.size()) ||
+        (installed && (!path || !*path))) {
+        return false;
+    }
+    const auto nextPath = installed ? std::string(path) : std::string{};
+    bool changed{};
+    AcquireSRWLockExclusive(&gOverrideLock);
+    auto& currentPath = gPackOverridePaths[static_cast<std::size_t>(packId)];
+    if (currentPath != nextPath) {
+        currentPath = nextPath;
+        gDynamicBanksDirty = true;
+        changed = true;
+    }
+    ReleaseSRWLockExclusive(&gOverrideLock);
+    if (changed && gWakeEvent) {
         SetEvent(gWakeEvent);
     }
     return true;
@@ -1463,15 +3203,17 @@ void WeaponBackendSetArchiveOverride(
 ) {
     const std::string nextArchive = archivePath ? archivePath : "";
     const std::string nextLookup = lookupPath ? lookupPath : "";
+    bool changed{};
     AcquireSRWLockExclusive(&gOverrideLock);
     if (gArchiveOverridePath != nextArchive ||
         gLookupOverridePath != nextLookup) {
         gArchiveOverridePath = nextArchive;
         gLookupOverridePath = nextLookup;
         gBankSourcesDirty = true;
+        changed = true;
     }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (gWakeEvent) {
+    if (changed && gWakeEvent) {
         SetEvent(gWakeEvent);
     }
 }

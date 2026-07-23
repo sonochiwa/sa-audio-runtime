@@ -23,7 +23,17 @@ enum class MinigunAudioMode : std::uint8_t {
 
 enum class AudioJobType : std::uint8_t {
     Gunshot,
-    BulletHit
+    BulletHit,
+    VehicleUpdate,
+    VehicleStop,
+    VehicleOneShot,
+    DialogueStart,
+    DialogueUpdate,
+    DialogueStop,
+    GenericOneShot,
+    StatefulStart,
+    StatefulUpdate,
+    StatefulStop
 };
 
 enum class RuntimeSoundBank : std::uint8_t {
@@ -53,6 +63,21 @@ struct AudioJob {
     MinigunAudioMode minigunMode{MinigunAudioMode::None};
     std::uintptr_t sourceKey{};
     float minigunStopVolumeDb{};
+    std::uint32_t sourceGeneration{};
+    std::int16_t bankId{-1};
+    std::int16_t playTime{};
+    float dopplerScale{1.0f};
+    bool startPercentage{};
+    bool keepAliveWhenSilent{};
+    bool isFrontEnd{};
+    bool isUnpausable{};
+};
+
+struct AudioCompletion {
+    std::uintptr_t sourceKey{};
+    std::uint32_t sourceGeneration{};
+    bool finished{true};
+    std::int16_t lengthMs{-1};
 };
 
 bool WeaponBackendStart(void* module);
@@ -61,6 +86,13 @@ bool WeaponBackendEnqueue(const AudioJob& job);
 bool WeaponBackendShouldReplaceOriginal();
 void WeaponBackendSetEnabled(bool enabled);
 bool WeaponBackendIsEnabled();
+bool VehicleBackendShouldReplaceOriginal();
+void VehicleBackendSetEnabled(bool enabled);
+bool VehicleBackendEnqueue(const AudioJob& job);
+bool DialogueBackendShouldReplaceOriginal();
+void DialogueBackendSetEnabled(bool enabled);
+bool DialogueBackendEnqueue(const AudioJob& job);
+bool DialogueBackendPollCompletion(AudioCompletion& completion);
 bool WeaponBackendSetSampleOverride(
     RuntimeSoundBank bank,
     std::int16_t soundId,
@@ -73,6 +105,17 @@ bool WeaponBackendClearSampleOverride(
 void WeaponBackendSetArchiveOverride(
     const char* archivePath,
     const char* lookupPath
+);
+bool WeaponBackendSetDynamicSampleOverride(
+    std::int16_t bankId,
+    std::int16_t soundId,
+    const char* path,
+    bool installed
+);
+bool WeaponBackendSetPackOverride(
+    std::int32_t packId,
+    const char* path,
+    bool installed
 );
 void WeaponBackendUpdateCameraTransform(
     const AudioCameraTransform& transform

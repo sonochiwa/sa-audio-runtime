@@ -9,6 +9,8 @@
 namespace {
 
 constexpr std::size_t kBankLookupEntrySize = 12;
+constexpr std::size_t kPakLookupEntrySize = 52;
+constexpr std::size_t kPakFilenameSize = 12;
 constexpr std::size_t kMaxSounds = 400;
 constexpr std::size_t kSoundInfoSize = 12;
 constexpr std::size_t kBankHeaderSize = 4 + kMaxSounds * kSoundInfoSize;
@@ -55,9 +57,56 @@ bool OriginalSoundBank::Load(
     std::size_t bankId,
     std::string& error
 ) {
+    const auto lookupPath =
+        gameDirectory + "\\audio\\CONFIG\\BankLkup.dat";
+    std::ifstream lookup(lookupPath, std::ios::binary);
+    if (!lookup) {
+        error = "cannot open " + lookupPath;
+        return false;
+    }
+    std::array<std::uint8_t, kBankLookupEntrySize> bankEntry{};
+    lookup.seekg(
+        static_cast<std::streamoff>(bankId * kBankLookupEntrySize),
+        std::ios::beg
+    );
+    if (!ReadExact(lookup, bankEntry.data(), bankEntry.size())) {
+        error = "cannot read sound bank lookup entry";
+        return false;
+    }
+
+    const auto pakLookupPath =
+        gameDirectory + "\\audio\\CONFIG\\PakFiles.dat";
+    std::ifstream pakLookup(pakLookupPath, std::ios::binary);
+    if (!pakLookup) {
+        error = "cannot open " + pakLookupPath;
+        return false;
+    }
+    std::array<std::uint8_t, kPakLookupEntrySize> pakEntry{};
+    pakLookup.seekg(
+        static_cast<std::streamoff>(
+            bankEntry[0] * kPakLookupEntrySize
+        ),
+        std::ios::beg
+    );
+    if (!ReadExact(pakLookup, pakEntry.data(), pakEntry.size())) {
+        error = "cannot read sound pack lookup entry";
+        return false;
+    }
+    std::string pakFilename;
+    for (std::size_t index = 0; index < kPakFilenameSize; ++index) {
+        const auto character = pakEntry[index];
+        if (character == 0 || character == 0xCD) {
+            break;
+        }
+        pakFilename.push_back(static_cast<char>(character));
+    }
+    if (pakFilename.empty()) {
+        error = "sound pack filename is empty";
+        return false;
+    }
     return Load(
-        gameDirectory + "\\audio\\CONFIG\\BankLkup.dat",
-        gameDirectory + "\\audio\\SFX\\GENRL",
+        lookupPath,
+        gameDirectory + "\\audio\\SFX\\" + pakFilename,
         bankId,
         error
     );
@@ -71,6 +120,9 @@ bool OriginalSoundBank::Load(
 ) {
     mSampleCount = 0;
     for (auto& sample : mSamples) {
+        sample = {};
+    }
+    for (auto& sample : mOriginalSamples) {
         sample = {};
     }
 
@@ -90,11 +142,10 @@ bool OriginalSoundBank::Load(
         return false;
     }
 
-    const auto pakId = entry[0];
     const auto bankOffset = ReadU32(entry.data() + 4);
     const auto bankDataSize = ReadU32(entry.data() + 8);
-    if (pakId != 1 || bankDataSize == 0) {
-        error = "sound bank is not in the original GENRL pak";
+    if (bankDataSize == 0) {
+        error = "sound bank is empty";
         return false;
     }
 
@@ -152,7 +203,6 @@ bool OriginalSoundBank::Load(
     }
 
     mSampleCount = numSounds;
-    mOriginalSamples = mSamples;
     return true;
 }
 
@@ -226,14 +276,16 @@ bool OriginalSoundBank::ApplyWaveOverride(
         return false;
     }
 
-    auto& sample = mSamples[static_cast<std::size_t>(soundId)];
+    const auto index = static_cast<std::size_t>(soundId);
+    auto& sample = mSamples[index];
+    auto& original = mOriginalSamples[index];
+    if (original.sampleRate == 0) {
+        original = sample;
+    }
     sample.pcm = std::move(pcm);
     sample.sampleRate = sampleRate;
-    // WAV overrides inherit the original bank headroom.
-    sample.headroom =
-        mOriginalSamples[static_cast<std::size_t>(soundId)].headroom;
-    const auto originalLoop =
-        mOriginalSamples[static_cast<std::size_t>(soundId)].loopStartSample;
+    sample.headroom = original.headroom;
+    const auto originalLoop = original.loopStartSample;
     sample.loopStartSample =
         originalLoop >= 0 &&
         static_cast<std::size_t>(originalLoop) < sample.pcm.size() / 2
@@ -246,8 +298,10 @@ bool OriginalSoundBank::RestoreOriginal(std::int16_t soundId) {
     if (soundId < 0 || static_cast<std::size_t>(soundId) >= mSampleCount) {
         return false;
     }
-    mSamples[static_cast<std::size_t>(soundId)] =
-        mOriginalSamples[static_cast<std::size_t>(soundId)];
+    const auto index = static_cast<std::size_t>(soundId);
+    if (mOriginalSamples[index].sampleRate != 0) {
+        mSamples[index] = mOriginalSamples[index];
+    }
     return true;
 }
 

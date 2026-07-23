@@ -116,6 +116,13 @@
 
   <ItemGroup>
     <ClInclude Include="audio_config.h" />
+    <ClInclude Include="modules\game_audio_common.inl" />
+    <ClInclude Include="modules\runtime_bootstrap.inl" />
+    <ClInclude Include="modules\runtime_context.inl" />
+    <ClInclude Include="modules\stateful_runtime.inl" />
+    <ClInclude Include="modules\vehicle_capture.inl" />
+    <ClInclude Include="modules\vehicle_runtime.inl" />
+    <ClInclude Include="modules\weapon_runtime.inl" />
     <ClInclude Include="sound_bank.h" />
     <ClInclude Include="weapon_backend.h" />
     <None Include="..\CHANGELOG.md" />

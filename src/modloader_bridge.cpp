@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 
 extern "C" {
@@ -93,7 +94,18 @@ using SampleCallback = void(__cdecl*)(
     std::int32_t
 );
 using SourcesCallback = void(__cdecl*)(const char*, const char*);
-constexpr char kPluginVersion[] = "1.1.0";
+using DynamicSampleCallback = void(__cdecl*)(
+    std::int32_t,
+    std::int32_t,
+    const char*,
+    std::int32_t
+);
+using PackCallback = void(__cdecl*)(
+    std::int32_t,
+    const char*,
+    std::int32_t
+);
+constexpr char kPluginVersion[] = "2.0.0";
 constexpr int kWeaponLocalBank = 137;
 constexpr int kBulletHitLocalBank = 21;
 constexpr std::size_t kRuntimeBankCount = 2;
@@ -111,6 +123,33 @@ std::string gArchivePath;
 std::string gLookupPath;
 bool gArchiveInstalled{};
 bool gLookupInstalled{};
+HMODULE gDeliveredBackend{};
+
+struct PackInfo {
+    const char* name;
+    int firstBank;
+};
+
+constexpr PackInfo kPacks[] = {
+    {"feet", 0},
+    {"genrl", 7},
+    {"pain_a", 144},
+    {"script", 147},
+    {"spc_ea", 365},
+    {"spc_fa", 411},
+    {"spc_ga", 429},
+    {"spc_na", 638},
+    {"spc_pa", 690}
+};
+
+struct DynamicSoundReference {
+    int bank{-1};
+    int sound{-1};
+};
+
+std::map<std::uint32_t, std::string> gDynamicPaths;
+std::array<std::string, std::size(kPacks)> gPackPaths{};
+std::array<bool, std::size(kPacks)> gPackInstalled{};
 
 struct SoundReference {
     int bank{-1};
@@ -159,6 +198,26 @@ SourcesCallback FindSourcesBackend() {
     return callback;
 }
 
+DynamicSampleCallback FindDynamicSampleBackend() {
+    const auto module = FindBackendModule();
+    return module
+        ? reinterpret_cast<DynamicSampleCallback>(GetProcAddress(
+              module,
+              "AudioRuntimeModLoaderDynamicSample"
+          ))
+        : nullptr;
+}
+
+PackCallback FindPackBackend() {
+    const auto module = FindBackendModule();
+    return module
+        ? reinterpret_cast<PackCallback>(GetProcAddress(
+              module,
+              "AudioRuntimeModLoaderPack"
+          ))
+        : nullptr;
+}
+
 std::string NormalisePath(const modloader_file_t* file) {
     if (!file || !file->buffer) {
         return {};
@@ -179,6 +238,17 @@ SoundReference GetSoundReference(const modloader_file_t* file) {
         return {};
     }
     const auto path = NormalisePath(file);
+    for (const auto& pack : kPacks) {
+        if (std::strcmp(pack.name, "genrl") == 0) {
+            continue;
+        }
+        const auto marker = std::string("\\") + pack.name + "\\";
+        const auto prefix = std::string(pack.name) + "\\";
+        if (path.find(marker) != std::string::npos ||
+            path.rfind(prefix, 0) == 0) {
+            return {};
+        }
+    }
     int bank{-1};
     int sound{-1};
     int consumed{};
@@ -222,6 +292,74 @@ SoundReference GetSoundReference(const modloader_file_t* file) {
         return {};
     }
     return {runtimeBank, sound - 1};
+}
+
+DynamicSoundReference GetDynamicSoundReference(
+    const modloader_file_t* file
+) {
+    const auto path = NormalisePath(file);
+    if (path.empty()) {
+        return {};
+    }
+    for (std::size_t packIndex = 0;
+         packIndex < std::size(kPacks);
+         ++packIndex) {
+        const auto& pack = kPacks[packIndex];
+        const std::string prefix = std::string(pack.name) + "\\bank_";
+        auto marker = path.rfind("\\" + prefix);
+        const char* target{};
+        if (marker != std::string::npos) {
+            target = path.c_str() + marker + 1;
+        } else if (path.rfind(prefix, 0) == 0) {
+            target = path.c_str();
+        } else {
+            continue;
+        }
+        int localBank{-1};
+        int sound{-1};
+        int consumed{};
+        const auto format = std::string(pack.name) +
+            "\\bank_%d\\sound_%d.wav%n";
+        if (std::sscanf(
+                target,
+                format.c_str(),
+                &localBank,
+                &sound,
+                &consumed
+            ) == 2 &&
+            target[consumed] == '\0' &&
+            localBank >= 1 &&
+            sound >= 1 &&
+            sound <= static_cast<int>(kMaxSounds)) {
+            const auto globalBank = pack.firstBank + localBank - 1;
+            const auto nextFirstBank = packIndex + 1 < std::size(kPacks)
+                ? kPacks[packIndex + 1].firstBank
+                : 700;
+            if (globalBank < nextFirstBank) {
+                return {globalBank, sound - 1};
+            }
+            return {};
+        }
+    }
+    return {};
+}
+
+int GetPackSource(const modloader_file_t* file) {
+    const auto path = NormalisePath(file);
+    if (path.empty()) {
+        return -1;
+    }
+    const auto slash = path.find_last_of('\\');
+    const auto name = path.substr(
+        slash == std::string::npos ? 0 : slash + 1
+    );
+    for (int index = 0; index < static_cast<int>(std::size(kPacks));
+         ++index) {
+        if (name == kPacks[index].name) {
+            return index;
+        }
+    }
+    return -1;
 }
 
 enum class SourceFile {
@@ -285,6 +423,35 @@ void DeliverSources() {
     );
 }
 
+void DeliverDynamic(
+    const DynamicSoundReference& reference,
+    const std::string& path,
+    bool installed
+) {
+    const auto callback = FindDynamicSampleBackend();
+    if (callback && reference.bank >= 0 && reference.sound >= 0) {
+        callback(
+            reference.bank,
+            reference.sound,
+            path.c_str(),
+            installed ? 1 : 0
+        );
+    }
+}
+
+void DeliverPack(int packId) {
+    const auto callback = FindPackBackend();
+    if (!callback || packId < 0 ||
+        packId >= static_cast<int>(gPackPaths.size())) {
+        return;
+    }
+    callback(
+        packId,
+        gPackPaths[static_cast<std::size_t>(packId)].c_str(),
+        gPackInstalled[static_cast<std::size_t>(packId)] ? 1 : 0
+    );
+}
+
 int StoreFile(const modloader_file_t* file, bool installed) {
     const auto source = GetSourceFile(file);
     if (source != SourceFile::None) {
@@ -296,21 +463,44 @@ int StoreFile(const modloader_file_t* file, bool installed) {
             : gLookupInstalled;
         active = installed;
         path = installed ? GetFullPath(file) : std::string{};
+        DeliverSources();
+        return 0;
+    }
+    const auto packSource = GetPackSource(file);
+    if (packSource >= 0) {
+        const auto index = static_cast<std::size_t>(packSource);
+        gPackInstalled[index] = installed;
+        gPackPaths[index] = installed ? GetFullPath(file) : std::string{};
+        DeliverPack(packSource);
         return 0;
     }
     const auto reference = GetSoundReference(file);
-    if (reference.bank < 0 || reference.sound < 0) {
+    if (reference.bank >= 0 && reference.sound >= 0) {
+        const auto bankIndex = static_cast<std::size_t>(reference.bank);
+        const auto soundIndex = static_cast<std::size_t>(reference.sound);
+        gInstalled[bankIndex][soundIndex] = installed;
+        if (installed && gLoader && gLoader->gamepath) {
+            gPaths[bankIndex][soundIndex] = GetFullPath(file);
+        } else {
+            gPaths[bankIndex][soundIndex].clear();
+        }
+        Deliver(reference);
         return 0;
     }
-    const auto bankIndex = static_cast<std::size_t>(reference.bank);
-    const auto soundIndex = static_cast<std::size_t>(reference.sound);
-    gInstalled[bankIndex][soundIndex] = installed;
-    if (installed && gLoader && gLoader->gamepath) {
-        gPaths[bankIndex][soundIndex] = GetFullPath(file);
-    } else {
-        gPaths[bankIndex][soundIndex].clear();
+    const auto dynamic = GetDynamicSoundReference(file);
+    if (dynamic.bank < 0 || dynamic.sound < 0) {
+        return 0;
     }
-    Deliver(reference);
+    const auto key =
+        static_cast<std::uint32_t>(dynamic.bank) << 16 |
+        static_cast<std::uint16_t>(dynamic.sound);
+    if (installed) {
+        gDynamicPaths[key] = GetFullPath(file);
+        DeliverDynamic(dynamic, gDynamicPaths[key], true);
+    } else {
+        gDynamicPaths.erase(key);
+        DeliverDynamic(dynamic, {}, false);
+    }
     return 0;
 }
 
@@ -336,8 +526,11 @@ int __cdecl GetBehaviour(
     modloader_file_t* file
 ) {
     const auto reference = GetSoundReference(file);
+    const auto dynamic = GetDynamicSoundReference(file);
     return (reference.bank >= 0 && reference.sound >= 0) ||
-           GetSourceFile(file) != SourceFile::None
+           (dynamic.bank >= 0 && dynamic.sound >= 0) ||
+           GetSourceFile(file) != SourceFile::None ||
+           GetPackSource(file) >= 0
         ? 2
         : 0;
 }
@@ -364,9 +557,11 @@ int __cdecl UninstallFile(
 }
 
 void __cdecl Update(modloader_plugin_t*) {
-    if (!FindBackendModule()) {
+    const auto backend = FindBackendModule();
+    if (!backend || backend == gDeliveredBackend) {
         return;
     }
+    gDeliveredBackend = backend;
     DeliverSources();
     for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
         for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
@@ -376,6 +571,21 @@ void __cdecl Update(modloader_plugin_t*) {
                     static_cast<int>(sound)
                 });
             }
+        }
+    }
+    for (const auto& [key, path] : gDynamicPaths) {
+        DeliverDynamic(
+            {
+                static_cast<int>(key >> 16),
+                static_cast<int>(key & 0xFFFFu)
+            },
+            path,
+            true
+        );
+    }
+    for (int pack = 0; pack < static_cast<int>(gPackPaths.size()); ++pack) {
+        if (gPackInstalled[static_cast<std::size_t>(pack)]) {
+            DeliverPack(pack);
         }
     }
 }
@@ -417,6 +627,7 @@ extern "C" __declspec(dllexport) void GetPluginData(
 
 extern "C" __declspec(dllexport) void
 AudioRuntimeReplayModLoaderSamples() {
+    gDeliveredBackend = FindBackendModule();
     DeliverSources();
     for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
         for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
@@ -426,6 +637,21 @@ AudioRuntimeReplayModLoaderSamples() {
                     static_cast<int>(sound)
                 });
             }
+        }
+    }
+    for (const auto& [key, path] : gDynamicPaths) {
+        DeliverDynamic(
+            {
+                static_cast<int>(key >> 16),
+                static_cast<int>(key & 0xFFFFu)
+            },
+            path,
+            true
+        );
+    }
+    for (int pack = 0; pack < static_cast<int>(gPackPaths.size()); ++pack) {
+        if (gPackInstalled[static_cast<std::size_t>(pack)]) {
+            DeliverPack(pack);
         }
     }
 }
