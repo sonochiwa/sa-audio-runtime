@@ -11,7 +11,7 @@ namespace {
 char gPath[MAX_PATH]{};
 std::atomic<bool> gEnabled{true};
 std::atomic<bool> gHotkeyEnabled{true};
-std::atomic<int> gHotkeyKey{'Y'};
+std::atomic<int> gHotkeyKey{0};
 std::atomic<int> gHotkeyModifier{VK_MENU};
 std::atomic<bool> gShowNotifications{true};
 std::atomic<bool> gGunshotsEnabled{true};
@@ -70,28 +70,28 @@ bool ReadMigratedBoolean(
     if (HasValue(section, key)) {
         return ReadBoolean(section, key, defaultValue);
     }
-    if (legacyKey && HasValue("Modules", legacyKey)) {
-        return ReadBoolean("Modules", legacyKey, defaultValue);
+    if (legacyKey && HasValue("modules", legacyKey)) {
+        return ReadBoolean("modules", legacyKey, defaultValue);
     }
     return defaultValue;
 }
 
 bool ReadVehicleLegacyValue(bool defaultValue) {
-    if (HasValue("Modules", "vehicles")) {
-        return ReadBoolean("Modules", "vehicles", defaultValue);
+    if (HasValue("modules", "vehicles")) {
+        return ReadBoolean("modules", "vehicles", defaultValue);
     }
-    if (HasValue("Modules", "vehicleEngines")) {
-        return ReadBoolean("Modules", "vehicleEngines", defaultValue);
+    if (HasValue("modules", "vehicleEngines")) {
+        return ReadBoolean("modules", "vehicleEngines", defaultValue);
     }
     return defaultValue;
 }
 
 bool ReadMiscLegacyValue(bool defaultValue) {
-    if (HasValue("Modules", "oneShotEffects")) {
-        return ReadBoolean("Modules", "oneShotEffects", defaultValue);
+    if (HasValue("modules", "oneShotEffects")) {
+        return ReadBoolean("modules", "oneShotEffects", defaultValue);
     }
-    if (HasValue("Modules", "effects")) {
-        return ReadBoolean("Modules", "effects", defaultValue);
+    if (HasValue("modules", "effects")) {
+        return ReadBoolean("modules", "effects", defaultValue);
     }
     return defaultValue;
 }
@@ -116,29 +116,29 @@ void CreateDefaultConfiguration(bool enabled) {
         "# Source code: https://github.com/sonochiwa/sa-audio-runtime\r\n"
         "# Default toggle hotkey: Alt + Y\r\n"
         "\r\n"
-        "[General]\r\n"
+        "[general]\r\n"
         "isEnabled=%d\r\n"
         "hotkeyEnabled=1\r\n"
         "hotkeyModifier=18\r\n"
         "hotkeyKey=89\r\n"
         "showNotifications=1\r\n"
         "\r\n"
-        "[WeaponAudio]\r\n"
+        "[weaponAudio]\r\n"
         "gunshots=1\r\n"
         "bulletImpacts=1\r\n"
         "effects=1\r\n"
         "\r\n"
-        "[VehicleAudio]\r\n"
+        "[vehicleAudio]\r\n"
         "engines=1\r\n"
         "effects=1\r\n"
         "collisions=1\r\n"
         "\r\n"
-        "[CharacterAudio]\r\n"
+        "[characterAudio]\r\n"
         "dialogues=1\r\n"
         "scanner=1\r\n"
         "effects=1\r\n"
         "\r\n"
-        "[WorldAudio]\r\n"
+        "[worldAudio]\r\n"
         "explosions=1\r\n"
         "ambience=1\r\n"
         "miscEffects=1\r\n",
@@ -174,20 +174,20 @@ void CreateDefaultConfiguration(bool enabled) {
 
 void ReadConfiguration(bool migratedEnabled) {
     const bool enabled = ReadBoolean(
-        "General",
+        "general",
         "isEnabled",
         migratedEnabled
     );
     const bool hotkeyEnabled = ReadBoolean(
-        "General",
+        "general",
         "hotkeyEnabled",
         true
     );
     const int hotkeyKey = std::clamp(
         static_cast<int>(GetPrivateProfileIntA(
-            "General",
+            "general",
             "hotkeyKey",
-            'Y',
+            0,
             gPath
         )),
         0,
@@ -195,7 +195,7 @@ void ReadConfiguration(bool migratedEnabled) {
     );
     const int hotkeyModifier = std::clamp(
         static_cast<int>(GetPrivateProfileIntA(
-            "General",
+            "general",
             "hotkeyModifier",
             VK_MENU,
             gPath
@@ -204,25 +204,25 @@ void ReadConfiguration(bool migratedEnabled) {
         255
     );
     const bool showNotifications = ReadBoolean(
-        "General",
+        "general",
         "showNotifications",
         true
     );
 
     const bool gunshotsEnabled = ReadMigratedBoolean(
-        "WeaponAudio",
+        "weaponAudio",
         "gunshots",
         "gunshots",
         true
     );
     const bool bulletImpactsEnabled = ReadMigratedBoolean(
-        "WeaponAudio",
+        "weaponAudio",
         "bulletImpacts",
         "gunshots",
         true
     );
     const bool weaponEffectsEnabled = ReadMigratedBoolean(
-        "WeaponAudio",
+        "weaponAudio",
         "effects",
         "weaponEffects",
         true
@@ -230,55 +230,55 @@ void ReadConfiguration(bool migratedEnabled) {
 
     const bool legacyVehicles = ReadVehicleLegacyValue(true);
     const bool vehicleEnginesEnabled = HasValue(
-        "VehicleAudio",
+        "vehicleAudio",
         "engines"
-    ) ? ReadBoolean("VehicleAudio", "engines", true) : legacyVehicles;
+    ) ? ReadBoolean("vehicleAudio", "engines", true) : legacyVehicles;
     const bool vehicleEffectsEnabled = HasValue(
-        "VehicleAudio",
+        "vehicleAudio",
         "effects"
-    ) ? ReadBoolean("VehicleAudio", "effects", true) : legacyVehicles;
+    ) ? ReadBoolean("vehicleAudio", "effects", true) : legacyVehicles;
     const bool vehicleCollisionsEnabled = ReadMigratedBoolean(
-        "VehicleAudio",
+        "vehicleAudio",
         "collisions",
         "vehicleCollisions",
         true
     );
 
     const bool dialoguesEnabled = ReadMigratedBoolean(
-        "CharacterAudio",
+        "characterAudio",
         "dialogues",
         "dialogues",
         true
     );
     const bool scannerEnabled = ReadMigratedBoolean(
-        "CharacterAudio",
+        "characterAudio",
         "scanner",
         "scanner",
         true
     );
     const bool characterEffectsEnabled = ReadMigratedBoolean(
-        "CharacterAudio",
+        "characterAudio",
         "effects",
         "characters",
         true
     );
 
     const bool explosionsEnabled = ReadMigratedBoolean(
-        "WorldAudio",
+        "worldAudio",
         "explosions",
         "explosions",
         true
     );
     const bool worldAmbienceEnabled = ReadMigratedBoolean(
-        "WorldAudio",
+        "worldAudio",
         "ambience",
         "worldAmbience",
         true
     );
     const bool miscEffectsEnabled = HasValue(
-        "WorldAudio",
+        "worldAudio",
         "miscEffects"
-    ) ? ReadBoolean("WorldAudio", "miscEffects", true)
+    ) ? ReadBoolean("worldAudio", "miscEffects", true)
       : ReadMiscLegacyValue(true);
 
     gEnabled.store(enabled, std::memory_order_release);
@@ -323,43 +323,43 @@ void ReadConfiguration(bool migratedEnabled) {
         std::memory_order_release
     );
 
-    WriteBoolean("General", "isEnabled", enabled);
-    WriteBoolean("General", "hotkeyEnabled", hotkeyEnabled);
-    WriteInteger("General", "hotkeyModifier", hotkeyModifier);
-    WriteInteger("General", "hotkeyKey", hotkeyKey);
+    WriteBoolean("general", "isEnabled", enabled);
+    WriteBoolean("general", "hotkeyEnabled", hotkeyEnabled);
+    WriteInteger("general", "hotkeyModifier", hotkeyModifier);
+    WriteInteger("general", "hotkeyKey", hotkeyKey);
     WriteBoolean(
-        "General",
+        "general",
         "showNotifications",
         showNotifications
     );
 
-    WriteBoolean("WeaponAudio", "gunshots", gunshotsEnabled);
+    WriteBoolean("weaponAudio", "gunshots", gunshotsEnabled);
     WriteBoolean(
-        "WeaponAudio",
+        "weaponAudio",
         "bulletImpacts",
         bulletImpactsEnabled
     );
-    WriteBoolean("WeaponAudio", "effects", weaponEffectsEnabled);
-    WriteBoolean("VehicleAudio", "engines", vehicleEnginesEnabled);
-    WriteBoolean("VehicleAudio", "effects", vehicleEffectsEnabled);
+    WriteBoolean("weaponAudio", "effects", weaponEffectsEnabled);
+    WriteBoolean("vehicleAudio", "engines", vehicleEnginesEnabled);
+    WriteBoolean("vehicleAudio", "effects", vehicleEffectsEnabled);
     WriteBoolean(
-        "VehicleAudio",
+        "vehicleAudio",
         "collisions",
         vehicleCollisionsEnabled
     );
-    WriteBoolean("CharacterAudio", "dialogues", dialoguesEnabled);
-    WriteBoolean("CharacterAudio", "scanner", scannerEnabled);
+    WriteBoolean("characterAudio", "dialogues", dialoguesEnabled);
+    WriteBoolean("characterAudio", "scanner", scannerEnabled);
     WriteBoolean(
-        "CharacterAudio",
+        "characterAudio",
         "effects",
         characterEffectsEnabled
     );
-    WriteBoolean("WorldAudio", "explosions", explosionsEnabled);
-    WriteBoolean("WorldAudio", "ambience", worldAmbienceEnabled);
-    WriteBoolean("WorldAudio", "miscEffects", miscEffectsEnabled);
+    WriteBoolean("worldAudio", "explosions", explosionsEnabled);
+    WriteBoolean("worldAudio", "ambience", worldAmbienceEnabled);
+    WriteBoolean("worldAudio", "miscEffects", miscEffectsEnabled);
 
-    WritePrivateProfileStringA("Modules", nullptr, nullptr, gPath);
-    WritePrivateProfileStringA("General", "ReloadCommand", nullptr, gPath);
+    WritePrivateProfileStringA("modules", nullptr, nullptr, gPath);
+    WritePrivateProfileStringA("general", "ReloadCommand", nullptr, gPath);
 }
 
 } // namespace
@@ -384,10 +384,10 @@ void AudioConfigInitialize(HMODULE module) {
         if (GetFileAttributesA(oldPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
             migratedEnabled =
                 GetPrivateProfileIntA(
-                    "Modules",
+                    "modules",
                     "gunshots",
                     GetPrivateProfileIntA(
-                        "General",
+                        "general",
                         "isEnabled",
                         1,
                         oldPath.c_str()
@@ -411,7 +411,7 @@ bool AudioConfigIsEnabled() {
 
 void AudioConfigSetEnabled(bool enabled) {
     gEnabled.store(enabled, std::memory_order_release);
-    WriteBoolean("General", "isEnabled", enabled);
+    WriteBoolean("general", "isEnabled", enabled);
 }
 
 bool AudioConfigHotkeyEnabled() {

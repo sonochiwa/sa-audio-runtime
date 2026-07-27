@@ -83,29 +83,29 @@ replacements are supported.
 # Source code: https://github.com/sonochiwa/sa-audio-runtime
 # Default toggle hotkey: Alt + Y
 
-[General]
+[general]
 isEnabled=1
 hotkeyEnabled=1
 hotkeyModifier=18
 hotkeyKey=89
 showNotifications=1
 
-[WeaponAudio]
+[weaponAudio]
 gunshots=1
 bulletImpacts=1
 effects=1
 
-[VehicleAudio]
+[vehicleAudio]
 engines=1
 effects=1
 collisions=1
 
-[CharacterAudio]
+[characterAudio]
 dialogues=1
 scanner=1
 effects=1
 
-[WorldAudio]
+[worldAudio]
 explosions=1
 ambience=1
 miscEffects=1
@@ -118,27 +118,29 @@ miscEffects=1
 | `hotkeyModifier` | `18` | Modifier virtual-key code; `18` is Alt and `0` disables the modifier. |
 | `hotkeyKey` | `89` | Main virtual-key code; `89` is Y. |
 | `showNotifications` | `1` | Shows enabled/disabled messages. |
-| `WeaponAudio.gunshots` | `1` | Uses the worker renderer for weapon shots and minigun states. |
-| `WeaponAudio.bulletImpacts` | `1` | Uses the worker renderer for material-dependent bullet impacts. |
-| `WeaponAudio.effects` | `1` | Uses the worker renderer for reloads, mechanics and stateful weapon loops. |
-| `VehicleAudio.engines` | `1` | Uses the worker renderer for player and traffic engine voices. |
-| `VehicleAudio.effects` | `1` | Uses the worker renderer for road, tires, reverse, skids, horns, sirens and supported vehicle one-shots. |
-| `VehicleAudio.collisions` | `1` | Uses the worker renderer for collisions, glass, water contact and doors. |
-| `CharacterAudio.dialogues` | `1` | Uses the worker renderer for supported speech and scripted dialogue. |
-| `CharacterAudio.scanner` | `1` | Uses the worker renderer for police-scanner dialogue. |
-| `CharacterAudio.effects` | `1` | Uses the worker renderer for footsteps, movement and character effects. |
-| `WorldAudio.explosions` | `1` | Uses the worker renderer for explosions and projectile layers. |
-| `WorldAudio.ambience` | `1` | Uses the worker renderer for supported weather, fire, water and script ambience. |
-| `WorldAudio.miscEffects` | `1` | Uses the worker renderer for safe uncategorized one-shot effects. |
+| `weaponAudio.gunshots` | `1` | Uses the worker renderer for weapon shots and minigun states. |
+| `weaponAudio.bulletImpacts` | `1` | Uses the worker renderer for material-dependent bullet impacts. |
+| `weaponAudio.effects` | `1` | Uses the worker renderer for reloads, mechanics and stateful weapon loops. |
+| `vehicleAudio.engines` | `1` | Uses the worker renderer for player and traffic engine voices. |
+| `vehicleAudio.effects` | `1` | Uses the worker renderer for road, tires, reverse, skids, horns, sirens and supported vehicle one-shots. |
+| `vehicleAudio.collisions` | `1` | Uses the worker renderer for collisions, glass, water contact and doors. |
+| `characterAudio.dialogues` | `1` | Uses the worker renderer for supported speech and scripted dialogue. |
+| `characterAudio.scanner` | `1` | Uses the worker renderer for police-scanner dialogue. |
+| `characterAudio.effects` | `1` | Uses the worker renderer for footsteps, movement and character effects. |
+| `worldAudio.explosions` | `1` | Uses the worker renderer for explosions and projectile layers. |
+| `worldAudio.ambience` | `1` | Uses the worker renderer for supported weather, fire, water and script ambience. |
+| `worldAudio.miscEffects` | `1` | Uses the worker renderer for safe uncategorized one-shot effects. |
 
 Press `Alt+Y` to reload the INI and switch the runtime between enabled and
 disabled. The new state is written to `isEnabled` and restored on the next
 launch.
 
-When `hotkeyEnabled=0`, no keys are polled. Configuration changes then require
-a game restart. Setting a module to `0` returns that audio family to GTA's
-original audio engine. Existing `[Modules]` configurations are migrated
-automatically to the categorized sections when the plugin reads the INI.
+When `hotkeyEnabled=0`, or when `hotkeyKey` is missing or `0`, no toggle key is
+polled. Configuration changes then require a game restart. Setting a module to
+`0` returns that audio family to GTA's original audio engine. Existing
+capitalized section names remain compatible because Windows INI lookup is
+case-insensitive. Legacy `[Modules]` configurations are migrated automatically
+to the categorized sections when the plugin reads the INI.
 
 ## Building
 
@@ -154,6 +156,13 @@ Build outputs:
 build\AudioRuntime.asi
 build\AudioRuntime.ini
 build\AudioRuntime.ModLoader.dll
+```
+
+Release staging and archive:
+
+```text
+build\release\SA-Audio-Runtime-v2.0.0\
+build\SA-Audio-Runtime-v2.0.0.zip
 ```
 
 ## Repository Layout

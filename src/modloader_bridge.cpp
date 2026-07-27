@@ -106,6 +106,8 @@ using PackCallback = void(__cdecl*)(
     std::int32_t
 );
 constexpr char kPluginVersion[] = "2.0.0";
+// modloader.h: MODLOADER_FF_IS_DIRECTORY
+constexpr std::uint32_t kFlagIsDirectory = 1;
 constexpr int kWeaponLocalBank = 137;
 constexpr int kBulletHitLocalBank = 21;
 constexpr std::size_t kRuntimeBankCount = 2;
@@ -216,6 +218,10 @@ PackCallback FindPackBackend() {
               "AudioRuntimeModLoaderPack"
           ))
         : nullptr;
+}
+
+bool IsDirectory(const modloader_file_t* file) {
+    return file && (file->flags & kFlagIsDirectory) != 0;
 }
 
 std::string NormalisePath(const modloader_file_t* file) {
@@ -345,6 +351,11 @@ DynamicSoundReference GetDynamicSoundReference(
 }
 
 int GetPackSource(const modloader_file_t* file) {
+    // A pack is an extension-less archive *file*. Matching a directory of the
+    // same name would claim the whole "<mod>\GENRL\" tree, see GetSourceFile.
+    if (IsDirectory(file)) {
+        return -1;
+    }
     const auto path = NormalisePath(file);
     if (path.empty()) {
         return -1;
@@ -369,6 +380,15 @@ enum class SourceFile {
 };
 
 SourceFile GetSourceFile(const modloader_file_t* file) {
+    // Only a real file can be a replacement archive. The "" entry in
+    // gExtensions makes modloader offer extension-less *directories* here as
+    // well, and a mod laid out as "<mod>\GENRL\bank_137\sound_027.wav" has a
+    // directory named exactly "genrl". Claiming it (even as CALLME) makes
+    // modloader clear file.recursive, so the bank_*\sound_*.wav files below it
+    // are never scanned -- neither by this bridge nor by gta3.std.bank.
+    if (IsDirectory(file)) {
+        return SourceFile::None;
+    }
     const auto path = NormalisePath(file);
     if (path.empty()) {
         return SourceFile::None;
@@ -525,6 +545,10 @@ int __cdecl GetBehaviour(
     modloader_plugin_t*,
     modloader_file_t* file
 ) {
+    // Every path this bridge understands is a file; never claim a directory.
+    if (IsDirectory(file)) {
+        return 0;
+    }
     const auto reference = GetSoundReference(file);
     const auto dynamic = GetDynamicSoundReference(file);
     return (reference.bank >= 0 && reference.sound >= 0) ||
