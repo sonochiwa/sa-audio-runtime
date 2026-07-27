@@ -161,8 +161,8 @@ build\AudioRuntime.ModLoader.dll
 Release staging and archive:
 
 ```text
-build\release\SA-Audio-Runtime-v2.0.0\
-build\SA-Audio-Runtime-v2.0.0.zip
+build\release\AudioRuntime-v2.0.0\
+build\AudioRuntime-v2.0.0.zip
 ```
 
 ## Repository Layout
@@ -183,7 +183,6 @@ src\sound_bank.cpp                    GENRL sound-bank reader
 src\modloader_bridge.cpp              Optional ModLoader bridge
 vendor\minhook\                       Vendored MinHook sources
 AudioRuntime.sln                      Visual Studio solution
-ROADMAP.md                            Planned audio families
 ```
 
 ## How It Works
@@ -219,8 +218,6 @@ No Miles Sound System calls are made from the worker. This isolates the
 background renderer from the thread-safety limitations of GTA's original audio
 middleware. Radio, music, cutscene tracks and SA:MP URL streams are outside the
 project scope and remain on their existing streaming paths.
-
-See [ROADMAP.md](ROADMAP.md) for implementation and validation status.
 
 ## License
 
