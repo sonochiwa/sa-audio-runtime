@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.1.0
+
+- Reworked vehicle sounds with the original game's seamless pre-loop buffer
+  layout, removing the restart gap between a horn's attack and loop.
+- Fixed rapid start/stop races that could leave a horn or another persistent
+  vehicle sound playing behind its owner.
+- Restored the original short software fades for stopped sounds and large
+  volume transitions, including skid twin-loop swaps.
+- Corrected persistent vehicle sound ownership and acceleration-layer playback
+  timing by using each sample's actual duration.
+- Added a GitHub Actions release workflow that builds release binaries from
+  tagged commits.
+- Added SHA-256 checksum files and signed GitHub artifact attestations so
+  downloaded release archives can be verified against their source workflow.
+
 ## 2.0.0
 
 - Expanded worker-thread audio rendering to vehicles, explosions, weapon

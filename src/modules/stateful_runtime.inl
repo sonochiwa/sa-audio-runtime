@@ -165,6 +165,9 @@ void* __fastcall HookPoliceScannerDestructor(void* self, void*) {
 void ServiceDialogueProxies() {
     AudioCompletion completion{};
     while (DialogueBackendPollCompletion(completion)) {
+        if (HandleVehicleCompletion(completion)) {
+            continue;
+        }
         bool handled{};
         for (auto proxy = gDialogueSoundProxies.begin();
              proxy != gDialogueSoundProxies.end();

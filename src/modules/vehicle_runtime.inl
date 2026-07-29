@@ -67,6 +67,9 @@ void ReconcileVehicleEngineOwnership(void* self, bool replaceOriginal) {
          ++soundType) {
         auto** slot = GetVehicleEngineSoundSlot(self, soundType);
         auto* proxy = FindVehicleProxy(self, soundType);
+        if (RetireStoppedVehicleProxy(slot, proxy)) {
+            continue;
+        }
         const bool isProxy =
             proxy && *slot == static_cast<void*>(proxy->sound.data());
         if (!replaceOriginal && isProxy) {
@@ -279,6 +282,9 @@ void ReconcilePersistentVehicleSounds(
             self,
             descriptor.proxyType
         );
+        if (RetireStoppedVehicleProxy(slot, proxy)) {
+            continue;
+        }
         const bool isProxy =
             proxy &&
             *slot == static_cast<void*>(proxy->sound.data());
@@ -374,6 +380,9 @@ void PublishPersistentVehicleSounds(
         if (!proxy || !proxy->active) {
             continue;
         }
+        if (RetireStoppedVehicleProxy(slot, proxy)) {
+            continue;
+        }
         if (replaceOriginal &&
             *slot == static_cast<void*>(proxy->sound.data())) {
             PublishVehicleUpdate(*proxy);
@@ -404,9 +413,16 @@ void UpdateVehicleAccelerationCursor(
         ReadProxyField<float>(proxy, kAeSoundSpeedOffset),
         0.05f
     );
+    const auto length = std::max<std::int16_t>(
+        ReadProxyField<std::int16_t>(
+            proxy,
+            kAeSoundLengthOffset
+        ),
+        1
+    );
     proxy.playPositionMs = std::fmod(
         proxy.playPositionMs + static_cast<float>(elapsed) * speed,
-        1000.0f
+        static_cast<float>(length)
     );
 
     auto* bytes = static_cast<std::uint8_t*>(self);
@@ -457,7 +473,14 @@ void __fastcall HookVehicleAudioService(void* self, void*) {
         if (!proxy || !proxy->active) {
             continue;
         }
-        slot = *GetVehicleEngineSoundSlot(self, soundType);
+        auto** currentSlot = GetVehicleEngineSoundSlot(
+            self,
+            soundType
+        );
+        if (RetireStoppedVehicleProxy(currentSlot, proxy)) {
+            continue;
+        }
+        slot = *currentSlot;
         if (replaceEngines &&
             slot == static_cast<void*>(proxy->sound.data())) {
             PublishVehicleUpdate(*proxy);

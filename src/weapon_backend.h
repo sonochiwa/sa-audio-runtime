@@ -71,6 +71,7 @@ struct AudioJob {
     bool keepAliveWhenSilent{};
     bool isFrontEnd{};
     bool isUnpausable{};
+    bool reportPlayTime{};
 };
 
 struct AudioCompletion {

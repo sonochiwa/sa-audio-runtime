@@ -63,6 +63,16 @@ struct Voice {
     float dopplerScale{};
     std::int16_t vehicleBankId{-1};
     bool vehicleLoopPending{};
+    DWORD vehiclePreloopRewriteOffset{};
+    DWORD vehiclePreloopRewriteBytes{};
+    bool vehicleStopFading{};
+    ULONGLONG vehicleStopFadeStartedAt{};
+    float vehicleStopFadeStartDb{-100.0f};
+    bool volumeFadeActive{};
+    ULONGLONG volumeFadeStartedAt{};
+    DWORD volumeFadeDurationMs{};
+    float volumeFadeStartDb{-100.0f};
+    float volumeFadeTargetDb{-100.0f};
     bool isRuntimeEffect{};
     bool isStatefulEffect{};
     bool reportsCompletion{};
@@ -387,6 +397,67 @@ bool CreateBaseBuffer(
     return true;
 }
 
+bool CreatePreloopBuffer(
+    IDirectSound8* directSound,
+    const OriginalPcmSample& sample,
+    IDirectSoundBuffer** output,
+    DWORD& initialPosition,
+    DWORD& rewriteOffset,
+    DWORD& rewriteBytes
+) {
+    constexpr std::size_t kMinimumLoopBufferBytes = 24000;
+    if (sample.loopStartSample <= 0) {
+        return false;
+    }
+    const auto preloopBytes =
+        static_cast<std::size_t>(sample.loopStartSample) * 2;
+    if (preloopBytes >= sample.pcm.size()) {
+        return false;
+    }
+    const auto loopBytes = sample.pcm.size() - preloopBytes;
+    if (loopBytes == 0) {
+        return false;
+    }
+
+    const auto targetBytes = std::max(
+        sample.pcm.size(),
+        kMinimumLoopBufferBytes
+    );
+    const auto loopCopies = targetBytes / loopBytes + 1;
+    if (loopCopies >
+        static_cast<std::size_t>(MAXDWORD) / loopBytes) {
+        return false;
+    }
+    const auto bufferBytes = loopCopies * loopBytes;
+    if (bufferBytes < preloopBytes ||
+        bufferBytes > static_cast<std::size_t>(MAXDWORD)) {
+        return false;
+    }
+
+    OriginalPcmSample prepared = sample;
+    prepared.loopStartSample = 0;
+    prepared.pcm.resize(bufferBytes);
+    for (std::size_t offset = 0; offset < bufferBytes; ++offset) {
+        prepared.pcm[offset] =
+            sample.pcm[preloopBytes + offset % loopBytes];
+    }
+
+    const auto preloopOffset = bufferBytes - preloopBytes;
+    std::memcpy(
+        prepared.pcm.data() + preloopOffset,
+        sample.pcm.data(),
+        preloopBytes
+    );
+    if (!CreateBaseBuffer(directSound, prepared, output)) {
+        return false;
+    }
+
+    initialPosition = static_cast<DWORD>(preloopOffset);
+    rewriteOffset = static_cast<DWORD>(preloopOffset);
+    rewriteBytes = static_cast<DWORD>(preloopBytes);
+    return true;
+}
+
 bool EnsureBaseBuffer(
     IDirectSound8* directSound,
     const OriginalPcmSample& sample,
@@ -517,6 +588,25 @@ void PublishDialogueStarted(
         job.sourceGeneration,
         false,
         static_cast<std::int16_t>(std::clamp(length, 0.0, 32767.0))
+    });
+}
+
+void PublishVehiclePlayTimeMetadata(
+    const AudioJob& job,
+    const OriginalPcmSample& sample
+) {
+    if (!job.reportPlayTime || sample.sampleRate == 0) {
+        return;
+    }
+    const auto samples = sample.pcm.size() / sizeof(std::int16_t);
+    const auto length =
+        static_cast<double>(samples) * 1000.0 /
+        static_cast<double>(sample.sampleRate);
+    QueueCompletion({
+        job.sourceKey,
+        job.sourceGeneration,
+        false,
+        static_cast<std::int16_t>(std::clamp(length, 1.0, 32767.0))
     });
 }
 
@@ -949,18 +1039,92 @@ float RebalanceVoiceMixer(std::vector<Voice>& voices) {
             ? 20.0f * std::log10(kCompressibleMixTarget / amplitudeSum)
             : 0.0f;
     for (auto& voice : voices) {
-        const auto finalVolume = static_cast<LONG>(
-            std::clamp(
-                std::min(voice.mixVolumeDb, 0.0f) +
-                    voice.outputGainDb +
-                    compressionGainDb,
-                -100.0f,
-                0.0f
-            ) * 100.0f
+        if (!voice.buffer || voice.vehicleStopFading) {
+            continue;
+        }
+        const auto targetVolume = std::clamp(
+            std::min(voice.mixVolumeDb, 0.0f) +
+                voice.outputGainDb +
+                compressionGainDb,
+            -100.0f,
+            0.0f
         );
-        AudioCallSucceeded(voice.buffer->SetVolume(finalVolume));
+        if (voice.volumeFadeActive) {
+            if (std::abs(
+                    targetVolume - voice.volumeFadeTargetDb
+                ) <= 0.01f) {
+                continue;
+            }
+            voice.volumeFadeActive = false;
+        }
+
+        LONG currentVolume{};
+        DWORD status{};
+        const bool isPlaying =
+            SUCCEEDED(voice.buffer->GetStatus(&status)) &&
+            (status & DSBSTATUS_PLAYING) != 0;
+        const auto currentVolumeDb =
+            SUCCEEDED(voice.buffer->GetVolume(&currentVolume))
+                ? static_cast<float>(currentVolume) / 100.0f
+                : targetVolume;
+        if (isPlaying &&
+            std::abs(targetVolume - currentVolumeDb) > 60.0f) {
+            voice.volumeFadeActive = true;
+            voice.volumeFadeStartedAt = GetTickCount64();
+            voice.volumeFadeDurationMs =
+                targetVolume <= currentVolumeDb ? 30u : 28u;
+            voice.volumeFadeStartDb = currentVolumeDb;
+            voice.volumeFadeTargetDb = targetVolume;
+            continue;
+        }
+        AudioCallSucceeded(voice.buffer->SetVolume(
+            static_cast<LONG>(targetVolume * 100.0f)
+        ));
     }
     return compressionGainDb;
+}
+
+void UpdateVoiceVolumeFades(std::vector<Voice>& voices) {
+    const auto now = GetTickCount64();
+    for (auto& voice : voices) {
+        if (!voice.volumeFadeActive ||
+            voice.vehicleStopFading ||
+            !voice.buffer) {
+            continue;
+        }
+        const auto elapsed = now - voice.volumeFadeStartedAt;
+        if (elapsed >= voice.volumeFadeDurationMs) {
+            AudioCallSucceeded(voice.buffer->SetVolume(
+                static_cast<LONG>(
+                    voice.volumeFadeTargetDb * 100.0f
+                )
+            ));
+            voice.volumeFadeActive = false;
+            continue;
+        }
+        const auto progress =
+            static_cast<float>(elapsed) /
+            static_cast<float>(voice.volumeFadeDurationMs);
+        const auto startAmplitude = std::pow(
+            10.0f,
+            voice.volumeFadeStartDb / 20.0f
+        );
+        const auto targetAmplitude = std::pow(
+            10.0f,
+            voice.volumeFadeTargetDb / 20.0f
+        );
+        const auto amplitude =
+            startAmplitude +
+            (targetAmplitude - startAmplitude) * progress;
+        const auto volume = std::clamp(
+            20.0f * std::log10(std::max(amplitude, 0.00001f)),
+            -100.0f,
+            0.0f
+        );
+        AudioCallSucceeded(voice.buffer->SetVolume(
+            static_cast<LONG>(volume * 100.0f)
+        ));
+    }
 }
 
 float Magnitude(const AudioVector& value) {
@@ -1647,7 +1811,8 @@ Voice* FindVehicleVoice(
         voices.begin(),
         voices.end(),
         [sourceKey](const Voice& voice) {
-            return voice.vehicleSourceKey == sourceKey;
+            return voice.vehicleSourceKey == sourceKey &&
+                   !voice.vehicleStopFading;
         }
     );
     return found != voices.end() ? &*found : nullptr;
@@ -1673,9 +1838,88 @@ void StopVehicleVoice(
     std::vector<Voice>& voices,
     std::uintptr_t sourceKey
 ) {
-    if (auto* voice = FindVehicleVoice(voices, sourceKey);
-        voice && voice->buffer) {
-        voice->buffer->Stop();
+    const auto now = GetTickCount64();
+    for (auto voice = voices.begin(); voice != voices.end();) {
+        if (voice->vehicleSourceKey != sourceKey ||
+            voice->vehicleStopFading) {
+            ++voice;
+            continue;
+        }
+        voice->vehicleLoopPending = false;
+        DWORD status{};
+        const bool canFade =
+            voice->buffer &&
+            !voice->pendingStart &&
+            !voice->suspended &&
+            SUCCEEDED(voice->buffer->GetStatus(&status)) &&
+            (status & DSBSTATUS_PLAYING);
+        if (canFade) {
+            voice->volumeFadeActive = false;
+            LONG currentVolume{};
+            if (SUCCEEDED(voice->buffer->GetVolume(&currentVolume))) {
+                voice->vehicleStopFadeStartDb =
+                    static_cast<float>(currentVolume) / 100.0f;
+            }
+            voice->vehicleStopFading = true;
+            voice->vehicleStopFadeStartedAt = now;
+            ++voice;
+            continue;
+        }
+        if (voice->buffer) {
+            voice->buffer->Stop();
+        }
+        if (voice->spatialBuffer) {
+            voice->spatialBuffer->Release();
+        }
+        if (voice->buffer) {
+            voice->buffer->Release();
+        }
+        voice = voices.erase(voice);
+    }
+}
+
+void UpdateVehicleStopFades(std::vector<Voice>& voices) {
+    constexpr ULONGLONG kSoftwareFadeTimeMs = 30;
+    const auto now = GetTickCount64();
+    for (auto voice = voices.begin(); voice != voices.end();) {
+        if (!voice->vehicleStopFading) {
+            ++voice;
+            continue;
+        }
+        const auto elapsed = now - voice->vehicleStopFadeStartedAt;
+        if (elapsed < kSoftwareFadeTimeMs && voice->buffer) {
+            const auto progress =
+                static_cast<float>(elapsed) /
+                static_cast<float>(kSoftwareFadeTimeMs);
+            const auto startAmplitude = std::pow(
+                10.0f,
+                voice->vehicleStopFadeStartDb / 20.0f
+            );
+            const auto amplitude = std::max(
+                startAmplitude * (1.0f - progress),
+                0.00001f
+            );
+            const auto volume = static_cast<LONG>(
+                std::clamp(
+                    20.0f * std::log10(amplitude),
+                    -100.0f,
+                    0.0f
+                ) * 100.0f
+            );
+            AudioCallSucceeded(voice->buffer->SetVolume(volume));
+            ++voice;
+            continue;
+        }
+        if (voice->buffer) {
+            voice->buffer->Stop();
+        }
+        if (voice->spatialBuffer) {
+            voice->spatialBuffer->Release();
+        }
+        if (voice->buffer) {
+            voice->buffer->Release();
+        }
+        voice = voices.erase(voice);
     }
 }
 
@@ -1721,15 +1965,31 @@ bool CreateVehicleVoice(
         return false;
     }
     IDirectSoundBuffer* buffer{};
-    auto& base =
-        bank.baseBuffers[static_cast<std::size_t>(job.drySoundId)];
-    if (!EnsureBaseBuffer(directSound, *sample, base) ||
-        FAILED(directSound->DuplicateSoundBuffer(base, &buffer))) {
-        if (base) {
-            base->Release();
-            base = nullptr;
+    DWORD initialPosition{};
+    DWORD preloopRewriteOffset{};
+    DWORD preloopRewriteBytes{};
+    if (delayedLoop) {
+        if (!CreatePreloopBuffer(
+                directSound,
+                *sample,
+                &buffer,
+                initialPosition,
+                preloopRewriteOffset,
+                preloopRewriteBytes
+            )) {
+            return false;
         }
-        return false;
+    } else {
+        auto& base =
+            bank.baseBuffers[static_cast<std::size_t>(job.drySoundId)];
+        if (!EnsureBaseBuffer(directSound, *sample, base) ||
+            FAILED(directSound->DuplicateSoundBuffer(base, &buffer))) {
+            if (base) {
+                base->Release();
+                base = nullptr;
+            }
+            return false;
+        }
     }
 
     IDirectSound3DBuffer* spatialBuffer{};
@@ -1755,15 +2015,34 @@ bool CreateVehicleVoice(
         buffer->Release();
         return false;
     }
-    if (job.startPercentage && job.playTime > 0) {
+    if (delayedLoop) {
+        if (!AudioCallSucceeded(
+                buffer->SetCurrentPosition(initialPosition)
+            )) {
+            spatialBuffer->Release();
+            buffer->Release();
+            return false;
+        }
+    } else if (job.playTime > 0) {
         DSBCAPS capabilities{};
         capabilities.dwSize = sizeof(capabilities);
         if (SUCCEEDED(buffer->GetCaps(&capabilities))) {
-            auto position = static_cast<DWORD>(
-                static_cast<std::uint64_t>(capabilities.dwBufferBytes) *
-                static_cast<std::uint16_t>(job.playTime) /
-                100u
-            );
+            auto position = job.startPercentage
+                ? static_cast<DWORD>(
+                      static_cast<std::uint64_t>(
+                          capabilities.dwBufferBytes
+                      ) *
+                      static_cast<std::uint16_t>(job.playTime) /
+                      100u
+                  )
+                : static_cast<DWORD>(std::min<std::uint64_t>(
+                      static_cast<std::uint64_t>(job.playTime) *
+                          sample->sampleRate * 2u /
+                          1000u,
+                      capabilities.dwBufferBytes > 1
+                          ? capabilities.dwBufferBytes - 2u
+                          : 0u
+                  ));
             position &= ~1u;
             if (position < capabilities.dwBufferBytes &&
                 !AudioCallSucceeded(
@@ -1819,7 +2098,7 @@ bool CreateVehicleVoice(
     voice.followsCamera = !job.isFrontEnd;
     voice.isFrontEnd = job.isFrontEnd;
     voice.isUnpausable = job.isUnpausable;
-    voice.looping = hasLoop && !delayedLoop;
+    voice.looping = hasLoop;
     voice.vehicleSourceKey = job.sourceKey;
     voice.isVehicleOneShot =
         job.type == AudioJobType::VehicleOneShot ||
@@ -1830,6 +2109,8 @@ bool CreateVehicleVoice(
     voice.dopplerScale = job.dopplerScale;
     voice.vehicleBankId = job.bankId;
     voice.vehicleLoopPending = delayedLoop;
+    voice.vehiclePreloopRewriteOffset = preloopRewriteOffset;
+    voice.vehiclePreloopRewriteBytes = preloopRewriteBytes;
     voice.isRuntimeEffect = runtimeVoice;
     voice.isStatefulEffect =
         job.type == AudioJobType::StatefulStart;
@@ -1841,7 +2122,6 @@ bool CreateVehicleVoice(
 }
 
 void ContinueVehicleLoops(
-    IDirectSound8* directSound,
     const std::string& lookupPath,
     const std::string& archivePath,
     std::unordered_map<std::int16_t, std::unique_ptr<VehicleBank>>& banks,
@@ -1859,7 +2139,18 @@ void ContinueVehicleLoops(
             RequestDeviceRecovery();
             continue;
         }
-        if (status & DSBSTATUS_PLAYING) {
+        if (!(status & DSBSTATUS_PLAYING)) {
+            continue;
+        }
+        DWORD playCursor{};
+        if (FAILED(voice.buffer->GetCurrentPosition(
+                &playCursor,
+                nullptr
+            ))) {
+            RequestDeviceRecovery();
+            continue;
+        }
+        if (playCursor >= voice.vehiclePreloopRewriteOffset) {
             continue;
         }
         auto* bank = GetVehicleBank(
@@ -1871,77 +2162,54 @@ void ContinueVehicleLoops(
         const auto* sample = bank
             ? bank->samples.Get(voice.soundId)
             : nullptr;
-        if (!sample || sample->loopStartSample <= 0) {
+        const auto preloopBytes = sample && sample->loopStartSample > 0
+            ? static_cast<std::size_t>(sample->loopStartSample) * 2
+            : 0;
+        if (!sample ||
+            preloopBytes == 0 ||
+            preloopBytes >= sample->pcm.size() ||
+            voice.vehiclePreloopRewriteBytes == 0) {
             voice.vehicleLoopPending = false;
             continue;
         }
-        const auto loopByte =
-            static_cast<std::size_t>(sample->loopStartSample) * 2;
-        if (loopByte >= sample->pcm.size()) {
-            voice.vehicleLoopPending = false;
-            continue;
-        }
-        OriginalPcmSample loopSample = *sample;
-        loopSample.pcm.assign(
-            sample->pcm.begin() + loopByte,
-            sample->pcm.end()
-        );
-        loopSample.loopStartSample = 0;
-        IDirectSoundBuffer* loopBuffer{};
-        if (!CreateBaseBuffer(directSound, loopSample, &loopBuffer)) {
-            voice.vehicleLoopPending = false;
-            continue;
-        }
-        IDirectSound3DBuffer* loopSpatial{};
-        if (FAILED(loopBuffer->QueryInterface(
-                IID_IDirectSound3DBuffer,
-                reinterpret_cast<void**>(&loopSpatial)
-            )) || !loopSpatial) {
-            loopBuffer->Release();
-            voice.vehicleLoopPending = false;
-            continue;
-        }
-        voice.spatialBuffer->Release();
-        voice.buffer->Release();
-        voice.buffer = loopBuffer;
-        voice.spatialBuffer = loopSpatial;
-        voice.looping = true;
-        voice.pendingStart = true;
-        voice.vehicleLoopPending = false;
-        const auto frequency = static_cast<DWORD>(std::clamp(
-            static_cast<double>(voice.sampleRate) *
-                std::max(
-                    voice.playbackSpeed * voice.dopplerScale,
-                    0.05f
-                ),
-            static_cast<double>(DSBFREQUENCY_MIN),
-            static_cast<double>(DSBFREQUENCY_MAX)
-        ));
-        if (!AudioCallSucceeded(loopBuffer->SetFrequency(frequency)) ||
-            !AudioCallSucceeded(loopSpatial->SetMode(
-                voice.isFrontEnd
-                    ? DS3DMODE_HEADRELATIVE
-                    : DS3DMODE_NORMAL,
-                DS3D_IMMEDIATE
-            )) ||
-            !AudioCallSucceeded(loopSpatial->SetMinDistance(
-                1.0f,
-                DS3D_IMMEDIATE
-            )) ||
-            !AudioCallSucceeded(loopSpatial->SetMaxDistance(
-                10000.0f,
-                DS3D_IMMEDIATE
-            )) ||
-            !AudioCallSucceeded(loopSpatial->SetPosition(
-                voice.worldPosition.x,
-                voice.isFrontEnd && voice.worldPosition.y == 0.0f
-                    ? 1.0f
-                    : voice.worldPosition.y,
-                voice.worldPosition.z,
-                DS3D_IMMEDIATE
+        const auto loopBytes = sample->pcm.size() - preloopBytes;
+        void* first{};
+        void* second{};
+        DWORD firstSize{};
+        DWORD secondSize{};
+        if (FAILED(voice.buffer->Lock(
+                voice.vehiclePreloopRewriteOffset,
+                voice.vehiclePreloopRewriteBytes,
+                &first,
+                &firstSize,
+                &second,
+                &secondSize,
+                0
             ))) {
-            voice.vehicleLoopPending = false;
+            RequestDeviceRecovery();
+            continue;
         }
+        const auto copyLoopBytes = [&](void* destination,
+                                       DWORD size,
+                                       std::size_t bufferOffset) {
+            auto* output = static_cast<std::uint8_t*>(destination);
+            for (DWORD index = 0; index < size; ++index) {
+                output[index] = sample->pcm[
+                    preloopBytes +
+                    (bufferOffset + index) % loopBytes
+                ];
+            }
+        };
+        copyLoopBytes(
+            first,
+            firstSize,
+            voice.vehiclePreloopRewriteOffset
+        );
+        if (second && secondSize) {
+            copyLoopBytes(second, secondSize, 0);
+        }
+        voice.buffer->Unlock(first, firstSize, second, secondSize);
+        voice.vehicleLoopPending = false;
     }
 }
 
@@ -2452,9 +2720,8 @@ void UpdateVehicleSources(
             voice->dopplerScale = job.dopplerScale;
             continue;
         }
-        if (voice && voice->buffer) {
-            voice->buffer->Stop();
-            CleanupVoices(voices);
+        if (voice) {
+            StopVehicleVoice(voices, job.sourceKey);
         }
         if (sample->loopStartSample < 0 &&
             source.lastStartedGeneration == job.sourceGeneration) {
@@ -2468,6 +2735,7 @@ void UpdateVehicleSources(
                 listenerVolume
             )) {
             source.lastStartedGeneration = job.sourceGeneration;
+            PublishVehiclePlayTimeMetadata(job, *sample);
         }
     }
 }
@@ -2923,7 +3191,6 @@ DWORD WINAPI BackendThread(void*) {
         gRead.store(read, std::memory_order_release);
         if (vehicleReplacementIsEnabled) {
             ContinueVehicleLoops(
-                directSound,
                 activeLookupPath,
                 activeArchivePath,
                 vehicleBanks,
@@ -2970,6 +3237,8 @@ DWORD WINAPI BackendThread(void*) {
             );
         }
         RebalanceVoiceMixer(voices);
+        UpdateVoiceVolumeFades(voices);
+        UpdateVehicleStopFades(voices);
         StartPendingVoices(voices);
     }
 

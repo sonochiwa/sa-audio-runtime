@@ -135,6 +135,40 @@ T ReadProxyField(
     return value;
 }
 
+bool HandleVehicleCompletion(const AudioCompletion& completion) {
+    if (completion.finished || completion.lengthMs <= 0) {
+        return false;
+    }
+    for (auto& entry : gVehicleSoundProxies) {
+        auto& proxy = entry.second;
+        if (!proxy.active ||
+            reinterpret_cast<std::uintptr_t>(proxy.sound.data()) !=
+                completion.sourceKey ||
+            proxy.generation != completion.sourceGeneration ||
+            !proxy.tracksAccelerationCursor) {
+            continue;
+        }
+        const auto previousLength = std::max<std::int16_t>(
+            ReadProxyField<std::int16_t>(
+                proxy,
+                kAeSoundLengthOffset
+            ),
+            1
+        );
+        proxy.playPositionMs =
+            proxy.playPositionMs *
+            static_cast<float>(completion.lengthMs) /
+            static_cast<float>(previousLength);
+        std::memcpy(
+            proxy.sound.data() + kAeSoundLengthOffset,
+            &completion.lengthMs,
+            sizeof(completion.lengthMs)
+        );
+        return true;
+    }
+    return false;
+}
+
 void PublishVehicleStop(VehicleSoundProxy& proxy) {
     AudioJob job{};
     job.type = AudioJobType::VehicleStop;
@@ -143,6 +177,29 @@ void PublishVehicleStop(VehicleSoundProxy& proxy) {
     );
     VehicleBackendEnqueue(job);
     proxy.active = false;
+}
+
+bool RetireStoppedVehicleProxy(
+    void** slot,
+    VehicleSoundProxy* proxy
+) {
+    if (!slot ||
+        !proxy ||
+        *slot != static_cast<void*>(proxy->sound.data())) {
+        return false;
+    }
+    const auto stopRequested = ReadProxyField<std::int16_t>(
+        *proxy,
+        kAeSoundStopRequestedOffset
+    ) != 0;
+    if (proxy->active && !stopRequested) {
+        return false;
+    }
+    *slot = nullptr;
+    if (proxy->active) {
+        PublishVehicleStop(*proxy);
+    }
+    return true;
 }
 
 void PublishVehicleUpdate(VehicleSoundProxy& proxy) {
@@ -184,6 +241,7 @@ void PublishVehicleUpdate(VehicleSoundProxy& proxy) {
     job.startPercentage = (flags & kSoundStartPercentage) != 0;
     job.keepAliveWhenSilent =
         proxy.soundType == 0x26 || proxy.soundType == 0x27;
+    job.reportPlayTime = proxy.tracksAccelerationCursor;
     job.playTime = ReadProxyField<std::int16_t>(
         proxy,
         kAeSoundPlayTimeOffset
