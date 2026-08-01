@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.1
+
+- Removed the `SA` prefix from the enabled and disabled on-screen status
+  messages.
+
 ## 2.1.0
 
 - Reworked vehicle sounds with the original game's seamless pre-loop buffer

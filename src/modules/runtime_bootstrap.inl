@@ -4,8 +4,8 @@ void ShowBackendState(bool enabled) {
     }
     reinterpret_cast<AddMessageJumpFn>(kAddMessageJumpAddress)(
         enabled
-            ? "~g~SA Audio Runtime: enabled"
-            : "~r~SA Audio Runtime: disabled",
+            ? "~g~Audio Runtime: enabled"
+            : "~r~Audio Runtime: disabled",
         2500,
         0,
         false

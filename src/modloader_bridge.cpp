@@ -105,7 +105,7 @@ using PackCallback = void(__cdecl*)(
     const char*,
     std::int32_t
 );
-constexpr char kPluginVersion[] = "2.1.0";
+constexpr char kPluginVersion[] = "2.1.1";
 // modloader.h: MODLOADER_FF_IS_DIRECTORY
 constexpr std::uint32_t kFlagIsDirectory = 1;
 constexpr int kWeaponLocalBank = 137;
