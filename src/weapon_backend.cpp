@@ -191,6 +191,7 @@ std::array<AudioJob, kQueueCapacity> gJobs{};
 std::atomic<std::uint32_t> gWrite{};
 std::atomic<std::uint32_t> gRead{};
 std::atomic<bool> gReady{};
+std::atomic<std::uint32_t> gResetEpoch{};
 std::atomic<bool> gReplaceOriginal{};
 std::atomic<bool> gReplaceVehicles{};
 std::atomic<bool> gReplaceDialogues{};
@@ -1818,6 +1819,51 @@ Voice* FindVehicleVoice(
     return found != voices.end() ? &*found : nullptr;
 }
 
+Voice* FindRestartableVehicleLoop(
+    std::vector<Voice>& voices,
+    const AudioJob& job
+) {
+    const auto found = std::find_if(
+        voices.begin(),
+        voices.end(),
+        [&](const Voice& voice) {
+            return voice.vehicleSourceKey == job.sourceKey &&
+                   voice.looping &&
+                   voice.soundId == job.drySoundId &&
+                   voice.vehicleBankId == job.bankId;
+        }
+    );
+    return found != voices.end() ? &*found : nullptr;
+}
+
+void RestartVehicleLoop(
+    Voice& voice,
+    const AudioJob& job,
+    float listenerVolume
+) {
+    LONG currentVolume{};
+    const auto currentVolumeDb =
+        voice.buffer && SUCCEEDED(voice.buffer->GetVolume(&currentVolume))
+            ? static_cast<float>(currentVolume) / 100.0f
+            : -100.0f;
+    voice.vehicleStopFading = false;
+    voice.vehicleLoopPending = false;
+    voice.vehicleGeneration = job.sourceGeneration;
+    voice.worldPosition = job.worldPosition;
+    voice.relativePosition = job.relativePosition;
+    voice.sourceVolumeDb = job.defaultVolumeDb;
+    voice.rollOffFactor = job.baseRollOffFactor;
+    voice.outputGainDb = job.effectsGainDb;
+    voice.mixVolumeDb = listenerVolume - job.effectsGainDb;
+    voice.playbackSpeed = job.baseSpeed;
+    voice.dopplerScale = job.dopplerScale;
+    voice.volumeFadeActive = true;
+    voice.volumeFadeStartedAt = GetTickCount64();
+    voice.volumeFadeDurationMs = 12;
+    voice.volumeFadeStartDb = currentVolumeDb;
+    voice.volumeFadeTargetDb = std::clamp(listenerVolume, -100.0f, 0.0f);
+}
+
 std::vector<Voice>::iterator FindQuietestStatefulVoice(
     std::vector<Voice>& voices
 ) {
@@ -2007,9 +2053,10 @@ bool CreateVehicleVoice(
         static_cast<double>(DSBFREQUENCY_MIN),
         static_cast<double>(DSBFREQUENCY_MAX)
     ));
+    const auto initialVolume = hasLoop ? -100.0f : listenerVolume;
     if (!AudioCallSucceeded(buffer->SetFrequency(frequency)) ||
         !AudioCallSucceeded(buffer->SetVolume(static_cast<LONG>(
-            std::clamp(listenerVolume, -100.0f, 0.0f) * 100.0f
+            std::clamp(initialVolume, -100.0f, 0.0f) * 100.0f
         )))) {
         spatialBuffer->Release();
         buffer->Release();
@@ -2111,6 +2158,17 @@ bool CreateVehicleVoice(
     voice.vehicleLoopPending = delayedLoop;
     voice.vehiclePreloopRewriteOffset = preloopRewriteOffset;
     voice.vehiclePreloopRewriteBytes = preloopRewriteBytes;
+    if (hasLoop) {
+        voice.volumeFadeActive = true;
+        voice.volumeFadeStartedAt = GetTickCount64();
+        voice.volumeFadeDurationMs = 12;
+        voice.volumeFadeStartDb = -100.0f;
+        voice.volumeFadeTargetDb = std::clamp(
+            listenerVolume,
+            -100.0f,
+            0.0f
+        );
+    }
     voice.isRuntimeEffect = runtimeVoice;
     voice.isStatefulEffect =
         job.type == AudioJobType::StatefulStart;
@@ -2720,6 +2778,11 @@ void UpdateVehicleSources(
             voice->dopplerScale = job.dopplerScale;
             continue;
         }
+        if (auto* restartable = FindRestartableVehicleLoop(voices, job)) {
+            RestartVehicleLoop(*restartable, job, listenerVolume);
+            source.lastStartedGeneration = job.sourceGeneration;
+            continue;
+        }
         if (voice) {
             StopVehicleVoice(voices, job.sourceKey);
         }
@@ -2900,8 +2963,27 @@ DWORD WINAPI BackendThread(void*) {
         gReplaceVehicles.load(std::memory_order_acquire);
     bool dialogueReplacementWasEnabled =
         gReplaceDialogues.load(std::memory_order_acquire);
+    auto resetEpoch = gResetEpoch.load(std::memory_order_acquire);
     auto nextDeviceHealthCheck = GetTickCount64() + 1000;
     while (WaitForMultipleObjects(2, waits, FALSE, 10) != WAIT_OBJECT_0) {
+        const auto requestedReset =
+            gResetEpoch.load(std::memory_order_acquire);
+        if (requestedReset != resetEpoch) {
+            resetEpoch = requestedReset;
+            StopAndReleaseVoices(voices, false);
+            minigunSources.clear();
+            vehicleSources.clear();
+            virtualRuntimeSources.clear();
+            gRead.store(
+                gWrite.load(std::memory_order_acquire),
+                std::memory_order_release
+            );
+            ClearCoalescedJobs();
+            AcquireSRWLockExclusive(&gCompletionLock);
+            gCompletions.clear();
+            ReleaseSRWLockExclusive(&gCompletionLock);
+            wasPaused = false;
+        }
         const auto deviceCheckTime = GetTickCount64();
         const bool recoveryRequested =
             gDeviceRecoveryRequested.exchange(
@@ -3264,6 +3346,7 @@ bool WeaponBackendStart(void* module) {
     gDeviceRecoveryRequested.store(false, std::memory_order_release);
     gWrite.store(0, std::memory_order_release);
     gRead.store(0, std::memory_order_release);
+    gResetEpoch.store(0, std::memory_order_release);
     ClearCoalescedJobs();
     AcquireSRWLockExclusive(&gCoalescedJobLock);
     gCoalescedJobs.reserve(1024);
@@ -3299,6 +3382,13 @@ void WeaponBackendStop() {
     gReady.store(false, std::memory_order_release);
     if (gStopEvent) {
         SetEvent(gStopEvent);
+    }
+}
+
+void WeaponBackendReset() {
+    gResetEpoch.fetch_add(1, std::memory_order_acq_rel);
+    if (gWakeEvent) {
+        SetEvent(gWakeEvent);
     }
 }
 

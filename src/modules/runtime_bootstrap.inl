@@ -18,6 +18,20 @@ bool IsVirtualKeyDown(int key) {
 
 void ApplyRuntimeState();
 
+void ResetRuntimeSources() {
+    gVehicleSoundProxies.clear();
+    gVehicleAudioOwners.clear();
+    gDialogueSoundProxies.clear();
+    gStatefulSoundProxies.clear();
+    EndVehicleCapture();
+    WeaponBackendReset();
+}
+
+void __fastcall HookAudioEngineReset(void* self, void*) {
+    gOriginalAudioEngineReset(self);
+    ResetRuntimeSources();
+}
+
 void ServiceToggleHotkey() {
     if (!AudioConfigHotkeyEnabled()) {
         gHotkeyWasDown = false;
@@ -319,6 +333,14 @@ bool InstallHooks() {
             reinterpret_cast<void*>(kAudioEngineServiceAddress),
             &HookAudioEngineService,
             reinterpret_cast<void**>(&gOriginalAudioEngineService)
+        ) != MH_OK) {
+        return false;
+    }
+
+    if (MH_CreateHook(
+            reinterpret_cast<void*>(kAudioEngineResetAddress),
+            &HookAudioEngineReset,
+            reinterpret_cast<void**>(&gOriginalAudioEngineReset)
         ) != MH_OK) {
         return false;
     }

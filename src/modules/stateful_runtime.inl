@@ -981,7 +981,8 @@ void* __fastcall HookRequestNewSound(
         if (IsVehicleEffectRendererEnabled() &&
             gVehicleAudioOwners.find(audioEntity) !=
                 gVehicleAudioOwners.end() &&
-            (flags & (kSoundRequestUpdates |
+            (flags & (kSoundCancellable |
+                      kSoundRequestUpdates |
                       kSoundLifespanTiedToEntity)) == 0 &&
             !eventNeedsOriginalTracking) {
             AudioJob job{};
@@ -1135,7 +1136,8 @@ void* __fastcall HookRequestNewSound(
             !isSpeechSlot &&
             !isScannerSlot &&
             !belongsToVehicle &&
-            (flags & (kSoundRequestUpdates |
+            (flags & (kSoundCancellable |
+                      kSoundRequestUpdates |
                       kSoundLifespanTiedToEntity |
                       kSoundMusicMastered)) == 0 &&
             frameDelay == 0) {

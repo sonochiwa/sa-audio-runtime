@@ -83,6 +83,7 @@ struct AudioCompletion {
 
 bool WeaponBackendStart(void* module);
 void WeaponBackendStop();
+void WeaponBackendReset();
 bool WeaponBackendEnqueue(const AudioJob& job);
 bool WeaponBackendShouldReplaceOriginal();
 void WeaponBackendSetEnabled(bool enabled);

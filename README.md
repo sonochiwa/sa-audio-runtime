@@ -7,7 +7,7 @@ thread while preserving the game's original sample selection and playback
 behavior. This reduces frame-time spikes under dense audio load without calling
 Miles Sound System from a background thread.
 
-Version 2.1.1 expands the runtime from gunshots and bullet impacts to supported
+Version 2.1.2 expands the runtime from gunshots and bullet impacts to supported
 vehicle, explosion, weapon-effect, collision, character, world, dialogue,
 police-scanner and safe one-shot paths. Unsupported or disabled sounds remain
 owned by GTA's original engine.
@@ -78,7 +78,7 @@ replacements are supported.
 ## Configuration
 
 ```ini
-# SA Audio Runtime v2.1.1
+# SA Audio Runtime v2.1.2
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-audio-runtime
 # Default toggle hotkey: Alt + Y
@@ -161,8 +161,8 @@ build\AudioRuntime.ModLoader.dll
 Release staging and archive:
 
 ```text
-build\release\AudioRuntime-v2.1.1\
-build\AudioRuntime-v2.1.1.zip
+build\release\AudioRuntime-v2.1.2\
+build\AudioRuntime-v2.1.2.zip
 ```
 
 ## Release Integrity
@@ -172,7 +172,7 @@ contains the ZIP archive, a SHA-256 checksum file, and a signed GitHub artifact
 attestation that binds the archive to its source commit and workflow:
 
 ```bat
-gh attestation verify AudioRuntime-v2.1.1.zip -R sonochiwa/sa-audio-runtime
+gh attestation verify AudioRuntime-v2.1.2.zip -R sonochiwa/sa-audio-runtime
 ```
 
 ## Repository Layout

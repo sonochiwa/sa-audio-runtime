@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.2
+
+- Smoothed persistent vehicle-loop starts and rapid horn retriggers to remove
+  audible clicks and restart seams.
+- Preserved GTA's original lifecycle for cancellable sounds so loading tunes
+  and other managed audio stop through the game's normal owner/event logic.
+- Cleared worker-owned sources when GTA resets its audio engine.
+
 ## 2.1.1
 
 - Removed the `SA` prefix from the enabled and disabled on-screen status
