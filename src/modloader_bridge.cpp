@@ -406,8 +406,31 @@ SourceFile GetSourceFile(const modloader_file_t* file) {
     return SourceFile::None;
 }
 
+// Mirrors modloader's own modloader::IsAbsolutePath.
+bool IsAbsolutePath(const char* path) {
+    const auto first = path[0];
+    if (first == '\\' || first == '/') {
+        return true;
+    }
+    if ((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z')) {
+        return path[1] == ':' && (path[2] == '\\' || path[2] == '/');
+    }
+    return false;
+}
+
 std::string GetFullPath(const modloader_file_t* file) {
-    if (!file || !file->buffer || !gLoader || !gLoader->gamepath) {
+    if (!file || !file->buffer) {
+        return {};
+    }
+    // file->buffer is normally relative to the game directory, but since
+    // modloader 0.3.10 the mod folder may live next to the ASI instead of in
+    // the game root (see MakePathRelativeTo in its loader.cpp). When that
+    // folder is not under the game directory the loader hands out an absolute
+    // path, and prefixing gamepath would corrupt it.
+    if (IsAbsolutePath(file->buffer)) {
+        return std::string(file->buffer);
+    }
+    if (!gLoader || !gLoader->gamepath) {
         return {};
     }
     return std::string(gLoader->gamepath) + file->buffer;
