@@ -42,7 +42,6 @@ jobs:
           New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null
           Copy-Item build\AudioRuntime.asi, build\AudioRuntime.ini -Destination $stage
           Copy-Item build\AudioRuntime.ModLoader.dll -Destination $pluginDir
-          Copy-Item README.md -Destination (Join-Path $stage README.txt)
           Compress-Archive -Path "$stage\*" -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
           "$hash  $archiveName" | Set-Content -LiteralPath $checksum -Encoding ascii

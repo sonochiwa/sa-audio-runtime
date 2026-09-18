@@ -56,7 +56,6 @@ already places the optional ModLoader bridge in the correct directory:
 ```text
 AudioRuntime.asi
 AudioRuntime.ini
-README.txt
 modloader\
   .data\
     plugins\
