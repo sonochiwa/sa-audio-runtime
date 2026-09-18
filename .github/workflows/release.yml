@@ -1,10 +1,9 @@
-name: Verified release
+name: Release
 
 on:
   push:
     tags:
-      - "v*"
-      - "[0-9]*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
   contents: write
@@ -30,36 +29,42 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-              throw "Release tag must contain a semantic version."
+
+          $iniHeader = (Get-Content Config\AudioRuntime.ini -TotalCount 1)
+          if ($iniHeader -ne "# Audio Runtime v$version") {
+              throw "Config\AudioRuntime.ini declares '$iniHeader', not version $version."
           }
+
           $archiveName = "AudioRuntime-v$version.zip"
           $archive = Join-Path build $archiveName
           $checksum = "$archive.sha256"
           $stage = Join-Path build "release\AudioRuntime-v$version"
-          $pluginDir = Join-Path $stage "modloader\.data\plugins"
           Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
           Copy-Item build\AudioRuntime.asi, build\AudioRuntime.ini -Destination $stage
+          $pluginDir = Join-Path $stage "modloader\.data\plugins"
+          New-Item -ItemType Directory -Path $pluginDir -Force | Out-Null
           Copy-Item build\AudioRuntime.ModLoader.dll -Destination $pluginDir
+
           Compress-Archive -Path "$stage\*" -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
           "$hash  $archiveName" | Set-Content -LiteralPath $checksum -Encoding ascii
 
           $changelog = Get-Content CHANGELOG.md -Raw
-          $pattern = "(?ms)^##[ \t]+v?$([regex]::Escape($version))[ \t]*\r?\n(?<body>.*?)(?=^##\s|\z)"
+          # The optional suffix after the heading must stay on the heading
+          # line: under (?s) a \s+ there crosses the blank line and swallows the
+          # first bullet of the section.
+          $pattern = "(?ms)^##[ \t]+$([regex]::Escape($version))(?:[ \t]+-[^\r\n]+)?[ \t]*\r?\n(?<body>.*?)(?=^##[ \t]|\z)"
           $match = [regex]::Match($changelog, $pattern)
           if (-not $match.Success) {
               throw "CHANGELOG.md has no section for $version."
           }
-          $notes = @(
-              $match.Groups['body'].Value.Trim()
-          ) -join [Environment]::NewLine
           [IO.File]::WriteAllText(
               (Join-Path build release-notes.md),
-              $notes,
+              $match.Groups['body'].Value.Trim(),
               [Text.UTF8Encoding]::new($false)
           )
+
           "version=$version" >> $env:GITHUB_OUTPUT
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "checksum=$checksum" >> $env:GITHUB_OUTPUT
@@ -79,5 +84,5 @@ jobs:
             "${{ steps.package.outputs.checksum }}" `
             --verify-tag `
             --latest `
-            --title "AudioRuntime v${{ steps.package.outputs.version }}" `
+            --title "Audio Runtime v${{ steps.package.outputs.version }}" `
             --notes-file build\release-notes.md

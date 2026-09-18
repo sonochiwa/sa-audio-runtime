@@ -1,16 +1,18 @@
-# SA Audio Runtime
+# Audio Runtime
 
-Worker-thread game-audio rendering for **GTA San Andreas** and SA:MP.
+`AudioRuntime.asi` is a standalone GTA San Andreas plugin that renders the
+game's sound effects on a worker thread instead of the main audio thread.
 
-SA Audio Runtime moves supported audio families away from GTA's main audio
-thread while preserving the game's original sample selection and playback
-behavior. This reduces frame-time spikes under dense audio load without calling
-Miles Sound System from a background thread.
+The plugin moves supported audio families away from GTA's main audio thread
+while preserving the game's original sample selection and playback behavior,
+which removes the frame-time spikes dense audio causes without calling Miles
+Sound System from a background thread. It covers gunshots, bullet impacts,
+vehicles, explosions, weapon effects, collisions, character and world sounds,
+dialogue, the police scanner and safe one-shot paths; unsupported or disabled
+sounds stay owned by GTA's original engine.
 
-Version 2.1.2 expands the runtime from gunshots and bullet impacts to supported
-vehicle, explosion, weapon-effect, collision, character, world, dialogue,
-police-scanner and safe one-shot paths. Unsupported or disabled sounds remain
-owned by GTA's original engine.
+An optional ModLoader companion, `AudioRuntime.ModLoader.dll`, feeds WAV and
+SFX-pack replacements from ModLoader into the runtime.
 
 ## Features
 
@@ -35,40 +37,41 @@ owned by GTA's original engine.
   or unavailable.
 - Optional ModLoader bridge for individual WAV and complete SFX-pack
   replacements across `FEET`, `GENRL`, `PAIN_A`, `SCRIPT` and `SPC_*`.
-- Persistent `Alt+Y` runtime toggle with on-screen status messages.
+- Persistent Alt+Y runtime toggle with on-screen status messages.
 - GTA SA 1.0 US Compact and Hoodlum executable validation before hooks are
   installed.
 
 ## Requirements
 
-- GTA San Andreas 1.0 US Compact or Hoodlum.
-- An ASI loader.
-- ModLoader only when WAV replacement support is needed.
+- GTA San Andreas 1.0 US (Compact or Hoodlum executable), or a SA-MP
+  installation based on it.
+- An ASI loader, such as Silent's ASI Loader or Ultimate ASI Loader.
+- ModLoader, only for WAV and SFX-pack replacement through the companion.
 
-SA:MP is supported. Other executable versions are rejected before game hooks
-are installed.
+Other executable versions are rejected before any game hook is installed.
 
 ## Installation
 
-Extract the release archive into the GTA San Andreas directory. Its layout
-already places the optional ModLoader bridge in the correct directory:
+1. Extract the archive into the GTA San Andreas directory. Its layout
+   already places the ModLoader companion where ModLoader loads plugins:
 
-```text
-AudioRuntime.asi
-AudioRuntime.ini
-modloader\
-  .data\
-    plugins\
-      AudioRuntime.ModLoader.dll
-```
+   ```text
+   AudioRuntime.asi
+   AudioRuntime.ini
+   modloader\
+     .data\
+       plugins\
+         AudioRuntime.ModLoader.dll
+   ```
 
-The ASI loader can load `AudioRuntime.asi` from the game directory. If your
-setup uses a separate ASI directory, move `AudioRuntime.asi` and
-`AudioRuntime.ini` there together. If the INI is missing, the plugin creates it
-next to the ASI with default values.
+2. Start the game.
 
-The bridge receives ModLoader's resolved SFX paths through its plugin API and
-translates pack-local `bank_N` folders to GTA's global sound-bank IDs. It
+If your setup uses a separate ASI directory, move `AudioRuntime.asi` and
+`AudioRuntime.ini` there together; the INI is created next to the plugin when
+it is missing.
+
+The companion receives ModLoader's resolved SFX paths through its plugin API
+and translates pack-local `bank_N` folders to GTA's global sound-bank IDs. It
 follows mod priority and live install-state changes without rescanning the
 ModLoader directory. Individual mono PCM WAV files, complete
 `FEET`/`GENRL`/`PAIN_A`/`SCRIPT`/`SPC_*` archives and `BankLkup.dat`
@@ -77,7 +80,7 @@ replacements are supported.
 ## Configuration
 
 ```ini
-# SA Audio Runtime v2.1.2
+# Audio Runtime v2.2.0
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-audio-runtime
 # Default toggle hotkey: Alt + Y
@@ -111,26 +114,31 @@ miscEffects=1
 ```
 
 | Setting | Default | Meaning |
-| --- | --- | --- |
+| --- | ---: | --- |
+| `[general]` | | |
 | `isEnabled` | `1` | Master state for runtime renderers. |
 | `hotkeyEnabled` | `1` | Enables runtime hotkey polling. |
 | `hotkeyModifier` | `18` | Modifier virtual-key code; `18` is Alt and `0` disables the modifier. |
 | `hotkeyKey` | `89` | Main virtual-key code; `89` is Y. |
 | `showNotifications` | `1` | Shows enabled/disabled messages. |
-| `weaponAudio.gunshots` | `1` | Uses the worker renderer for weapon shots and minigun states. |
-| `weaponAudio.bulletImpacts` | `1` | Uses the worker renderer for material-dependent bullet impacts. |
-| `weaponAudio.effects` | `1` | Uses the worker renderer for reloads, mechanics and stateful weapon loops. |
-| `vehicleAudio.engines` | `1` | Uses the worker renderer for player and traffic engine voices. |
-| `vehicleAudio.effects` | `1` | Uses the worker renderer for road, tires, reverse, skids, horns, sirens and supported vehicle one-shots. |
-| `vehicleAudio.collisions` | `1` | Uses the worker renderer for collisions, glass, water contact and doors. |
-| `characterAudio.dialogues` | `1` | Uses the worker renderer for supported speech and scripted dialogue. |
-| `characterAudio.scanner` | `1` | Uses the worker renderer for police-scanner dialogue. |
-| `characterAudio.effects` | `1` | Uses the worker renderer for footsteps, movement and character effects. |
-| `worldAudio.explosions` | `1` | Uses the worker renderer for explosions and projectile layers. |
-| `worldAudio.ambience` | `1` | Uses the worker renderer for supported weather, fire, water and script ambience. |
-| `worldAudio.miscEffects` | `1` | Uses the worker renderer for safe uncategorized one-shot effects. |
+| `[weaponAudio]` | | |
+| `gunshots` | `1` | Uses the worker renderer for weapon shots and minigun states. |
+| `bulletImpacts` | `1` | Uses the worker renderer for material-dependent bullet impacts. |
+| `effects` | `1` | Uses the worker renderer for reloads, mechanics and stateful weapon loops. |
+| `[vehicleAudio]` | | |
+| `engines` | `1` | Uses the worker renderer for player and traffic engine voices. |
+| `effects` | `1` | Uses the worker renderer for road, tires, reverse, skids, horns, sirens and supported vehicle one-shots. |
+| `collisions` | `1` | Uses the worker renderer for collisions, glass, water contact and doors. |
+| `[characterAudio]` | | |
+| `dialogues` | `1` | Uses the worker renderer for supported speech and scripted dialogue. |
+| `scanner` | `1` | Uses the worker renderer for police-scanner dialogue. |
+| `effects` | `1` | Uses the worker renderer for footsteps, movement and character effects. |
+| `[worldAudio]` | | |
+| `explosions` | `1` | Uses the worker renderer for explosions and projectile layers. |
+| `ambience` | `1` | Uses the worker renderer for supported weather, fire, water and script ambience. |
+| `miscEffects` | `1` | Uses the worker renderer for safe uncategorized one-shot effects. |
 
-Press `Alt+Y` to reload the INI and switch the runtime between enabled and
+Press Alt+Y to reload the INI and switch the runtime between enabled and
 disabled. The new state is written to `isEnabled` and restored on the next
 launch.
 
@@ -143,55 +151,80 @@ to the categorized sections when the plugin reads the INI.
 
 ## Building
 
-Open `AudioRuntime.sln` in Visual Studio 2022 and build `Release|Win32`, or run:
+Visual Studio 2022 (v143), `Release|Win32`. Open `AudioRuntime.sln` or run:
 
-```bat
-msbuild AudioRuntime.sln /p:Configuration=Release /p:Platform=Win32
+```powershell
+msbuild AudioRuntime.sln /t:Rebuild /p:Configuration=Release /p:Platform=Win32
 ```
 
-Build outputs:
-
-```text
-build\AudioRuntime.asi
-build\AudioRuntime.ini
-build\AudioRuntime.ModLoader.dll
-```
-
-Release staging and archive:
-
-```text
-build\release\AudioRuntime-v2.1.2\
-build\AudioRuntime-v2.1.2.zip
-```
-
-## Release Integrity
-
-Tagged releases are compiled and packaged by GitHub Actions. Each release
-contains the ZIP archive, a SHA-256 checksum file, and a signed GitHub artifact
-attestation that binds the archive to its source commit and workflow:
-
-```bat
-gh attestation verify AudioRuntime-v2.1.2.zip -R sonochiwa/sa-audio-runtime
-```
+The solution builds `build\AudioRuntime.asi` next to a copy of the INI and
+`build\AudioRuntime.ModLoader.dll`. `Config\AudioRuntime.ini` is compiled
+into the plugin as an `RCDATA` resource, so the INI written when the file is
+missing is byte for byte the canonical one.
 
 ## Repository Layout
 
 ```text
-Config\AudioRuntime.ini               Default configuration
-src\audio_config.cpp                  Persistent settings
-src\main.cpp                          ASI entry points and module composition
-src\modules\runtime_context.inl       GTA addresses, types and shared state
-src\modules\game_audio_common.inl     Camera, mixer and shared job helpers
-src\modules\weapon_runtime.inl        Gunshot and bullet-impact capture
-src\modules\vehicle_capture.inl       Vehicle source capture and job creation
-src\modules\stateful_runtime.inl      Dialogue and stateful sound proxies
-src\modules\vehicle_runtime.inl       Vehicle ownership and lifecycle
-src\modules\runtime_bootstrap.inl     Hotkey, hooks and startup
-src\weapon_backend.cpp                Worker-thread audio renderer
-src\sound_bank.cpp                    GENRL sound-bank reader
-src\modloader_bridge.cpp              Optional ModLoader bridge
-vendor\minhook\                       Vendored MinHook sources
-AudioRuntime.sln                      Visual Studio solution
+AudioRuntime.sln
+README.md
+CHANGELOG.md
+LICENSE
+.github\workflows\release.yml   Tagged release build, checksum and attestation
+Config\
+  AudioRuntime.ini              Canonical configuration, embedded as RCDATA
+src\
+  AudioRuntime.cpp              DllMain and the exports the companion calls
+  AudioRuntime.rc               Version resource and the embedded INI
+  AudioRuntime.vcxproj
+  AudioRuntime.ModLoader.cpp    ModLoader plugin entry points
+  AudioRuntime.ModLoader.rc     Companion version resource
+  AudioRuntime.ModLoader.vcxproj
+  audio_config.cpp / audio_config.h   INI creation, reading and write-back
+  sound_bank.cpp / sound_bank.h       GENRL sound-bank reader
+  weapon_backend.cpp / weapon_backend.h   The backend's public interface
+  resource.h
+  version.h
+  backend\                      Worker-thread DirectSound renderer
+    backend.h                             Includes every backend header
+    buffers.cpp                           DirectSound buffers and override application
+    core.cpp / core.h                     Override tables, job queue, completions
+    device.cpp                            Listener and device creation
+    dialogue.cpp                          Dialogue jobs
+    guns.cpp                              Gunshot layers, minigun, bullet hits
+    listener.cpp                          Camera transform and attenuation
+    prelude.h                             System includes
+    thread.cpp                            The backend thread
+    vehicle_banks.cpp                     Vehicle and dialogue bank loading
+    vehicle_jobs.cpp                      Vehicle loop continuation and one-shots
+    vehicle_sources.cpp                   Vehicle source updates
+    vehicle_voices.cpp                    Vehicle voice creation and stop fades
+    virtual_sources.cpp                   Virtualised runtime sources
+    voice_lifecycle.cpp                   Starting, suspending, resuming and stopping voices
+    voices.cpp                            Voice slots, priorities, playback, mixing
+  bridge\                       ModLoader companion
+    bridge.h                              Includes every bridge header
+    core.cpp / core.h                     Backend lookup and state
+    delivery.cpp                          Delivery to the runtime and plugin callbacks
+    modloader_api.h                       The subset of the ModLoader plugin API used
+    paths.cpp                             Path and bank resolution
+    prelude.h                             System includes
+  modules\                      Game hooks and sound capture
+    game_audio_common.cpp / game_audio_common.hCamera, mixer and shared job helpers
+    hooks_install.cpp                     Hook installation
+    modules.h                             Includes every runtime header
+    prelude.h                             System includes
+    runtime_bootstrap.cpp / runtime_bootstrap.hHotkey, configuration and startup
+    runtime_context.cpp / runtime_context.hGTA addresses, types and shared state
+    stateful_hooks.cpp                    Sound request and cancellation hooks
+    stateful_queries.cpp                  Stateful sound lookups
+    stateful_runtime.cpp / stateful_runtime.hDialogue proxies
+    stateful_sounds.cpp                   Stateful sound classification and service
+    vehicle_capture.cpp / vehicle_capture.hVehicle source capture and job creation
+    vehicle_reconcile.cpp                 Persistent vehicle sound reconciliation
+    vehicle_runtime.cpp / vehicle_runtime.hVehicle ownership and lifecycle
+    weapon_runtime.cpp / weapon_runtime.h Gunshot and bullet-impact capture
+vendor\
+  minhook\                      MinHook, compiled into the plugin
 ```
 
 ## How It Works
@@ -228,8 +261,18 @@ background renderer from the thread-safety limitations of GTA's original audio
 middleware. Radio, music, cutscene tracks and SA:MP URL streams are outside the
 project scope and remain on their existing streaming paths.
 
+## Release Integrity
+
+Tagged releases are built by GitHub Actions from the tagged commit. Each
+release carries `AudioRuntime-vX.Y.Z.zip`, its SHA-256 in
+`AudioRuntime-vX.Y.Z.zip.sha256` and a signed build-provenance attestation,
+which proves that the archive was produced by this repository's workflow
+from that revision. It does not prove the code is bug-free.
+
+```text
+gh attestation verify AudioRuntime-vX.Y.Z.zip -R sonochiwa/sa-audio-runtime
+```
+
 ## License
 
-SA Audio Runtime is released under the [MIT License](LICENSE). MinHook is
-included under its own BSD-style license in
-[`vendor/minhook/LICENSE.txt`](vendor/minhook/LICENSE.txt).
+MIT. See [LICENSE](LICENSE).

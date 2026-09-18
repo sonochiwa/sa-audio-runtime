@@ -1,3 +1,9 @@
+#pragma once
+
+#include "modules/prelude.h"
+
+namespace runtime {
+
 constexpr std::uintptr_t kPlayGunSoundsAddress = 0x503CE0;
 constexpr std::uintptr_t kPlayMinigunFireSoundsAddress = 0x5047C0;
 constexpr std::uintptr_t kPlayBulletHitSoundAddress = 0x4DB7C0;
@@ -178,32 +184,31 @@ using ResolveProbabilityFn = bool(__cdecl*)(float);
 using CanSeeOutsideFn = bool(__cdecl*)();
 using AddMessageJumpFn =
     void(__cdecl*)(const char*, std::uint32_t, std::uint16_t, bool);
-
-HMODULE gModule{};
-PlayGunSoundsFn gOriginalPlayGunSounds{};
-PlayMinigunFireSoundsFn gOriginalPlayMinigunFireSounds{};
-PlayBulletHitSoundFn gOriginalPlayBulletHitSound{};
-ServiceFn gOriginalAudioEngineService{};
-ServiceFn gOriginalAudioEngineReset{};
-ServiceFn gOriginalVehicleAudioService{};
-ServiceFn gOriginalVehicleAudioTerminate{};
-VehicleEngineSoundFn gOriginalRequestPlayerEngineSound{};
-VehicleEngineSoundFn gOriginalStartDummyEngineSound{};
-VehicleCancelSoundFn gOriginalCancelVehicleEngineSound{};
-RequestNewSoundFn gOriginalRequestNewSound{};
-void* gRequestNewSoundGateway{};
-bool gRequestNewSoundHotpatchInstalled{};
-AreBankSoundsPlayingFn gOriginalAreBankSoundsPlaying{};
-AreEventSoundsPlayingFn gOriginalAreEventSoundsPlaying{};
-AreEventPhysicalSoundsPlayingFn gOriginalAreEventPhysicalSoundsPlaying{};
-CancelEventSoundsFn gOriginalCancelEventSounds{};
-CancelEventPhysicalSoundsFn gOriginalCancelEventPhysicalSounds{};
-CancelBankSlotSoundsFn gOriginalCancelBankSlotSounds{};
-CancelOwnedSoundsFn gOriginalCancelOwnedSounds{};
-AudioEntityTerminateFn gOriginalPedSpeechTerminate{};
-AudioEntityTerminateFn gOriginalPedlessSpeechTerminate{};
-AudioEntityDestructorFn gOriginalPoliceScannerDestructor{};
-bool gHotkeyWasDown{};
+extern HMODULE gModule;
+extern PlayGunSoundsFn gOriginalPlayGunSounds;
+extern PlayMinigunFireSoundsFn gOriginalPlayMinigunFireSounds;
+extern PlayBulletHitSoundFn gOriginalPlayBulletHitSound;
+extern ServiceFn gOriginalAudioEngineService;
+extern ServiceFn gOriginalAudioEngineReset;
+extern ServiceFn gOriginalVehicleAudioService;
+extern ServiceFn gOriginalVehicleAudioTerminate;
+extern VehicleEngineSoundFn gOriginalRequestPlayerEngineSound;
+extern VehicleEngineSoundFn gOriginalStartDummyEngineSound;
+extern VehicleCancelSoundFn gOriginalCancelVehicleEngineSound;
+extern RequestNewSoundFn gOriginalRequestNewSound;
+extern void* gRequestNewSoundGateway;
+extern bool gRequestNewSoundHotpatchInstalled;
+extern AreBankSoundsPlayingFn gOriginalAreBankSoundsPlaying;
+extern AreEventSoundsPlayingFn gOriginalAreEventSoundsPlaying;
+extern AreEventPhysicalSoundsPlayingFn gOriginalAreEventPhysicalSoundsPlaying;
+extern CancelEventSoundsFn gOriginalCancelEventSounds;
+extern CancelEventPhysicalSoundsFn gOriginalCancelEventPhysicalSounds;
+extern CancelBankSlotSoundsFn gOriginalCancelBankSlotSounds;
+extern CancelOwnedSoundsFn gOriginalCancelOwnedSounds;
+extern AudioEntityTerminateFn gOriginalPedSpeechTerminate;
+extern AudioEntityTerminateFn gOriginalPedlessSpeechTerminate;
+extern AudioEntityDestructorFn gOriginalPoliceScannerDestructor;
+extern bool gHotkeyWasDown;
 
 constexpr std::size_t kVehicleEngineSoundCount = 12;
 constexpr std::size_t kVehicleAudioStateOffset = 0xA9;
@@ -355,14 +360,13 @@ struct StatefulSoundProxy {
     bool started{};
     bool active{};
 };
-
-std::map<std::uint64_t, VehicleSoundProxy> gVehicleSoundProxies;
-std::set<void*> gVehicleAudioOwners;
-std::uint32_t gVehicleOneShotSequence{};
-thread_local VehicleCapture gVehicleCapture{};
+extern std::map<std::uint64_t, VehicleSoundProxy> gVehicleSoundProxies;
+extern std::set<void*> gVehicleAudioOwners;
+extern std::uint32_t gVehicleOneShotSequence;
+extern thread_local VehicleCapture gVehicleCapture;
 using DialogueSoundProxyMap = std::map<void*, DialogueSoundProxy>;
-DialogueSoundProxyMap gDialogueSoundProxies;
-std::map<std::uint32_t, StatefulSoundProxy> gStatefulSoundProxies;
-std::uint32_t gStatefulSoundSequence{};
+extern DialogueSoundProxyMap gDialogueSoundProxies;
+extern std::map<std::uint32_t, StatefulSoundProxy> gStatefulSoundProxies;
+extern std::uint32_t gStatefulSoundSequence;
 
-bool HandleStatefulCompletion(const AudioCompletion& completion);
+} // namespace runtime

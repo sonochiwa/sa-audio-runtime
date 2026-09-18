@@ -1,3 +1,7 @@
+#include "modules/modules.h"
+
+namespace runtime {
+
 float LinearGainToDb(float gain) {
     return gain > 0.00001f ? 20.0f * std::log10(gain) : -100.0f;
 }
@@ -75,3 +79,4 @@ void PublishCameraTransform() {
     });
 }
 
+} // namespace runtime

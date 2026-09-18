@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.2.0
+
+- Changed the public name to Audio Runtime; the INI header and the release
+  title no longer carry the game prefix.
+- Changed the INI to be created from the canonical file compiled into the
+  plugin, byte for byte.
+- Added version information to both plugin files.
+- Removed `README.txt` from the release archive; the repository README is the
+  documentation.
+
 ## 2.1.2
 
 - Smoothed persistent vehicle-loop starts and rapid horn retriggers to remove

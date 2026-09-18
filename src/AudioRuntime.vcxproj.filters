@@ -1,0 +1,144 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="backend" />
+    <Filter Include="modules" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="AudioRuntime.cpp" />
+    <ClCompile Include="audio_config.cpp" />
+    <ClCompile Include="backend\buffers.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\core.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\device.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\dialogue.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\guns.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\listener.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\thread.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\vehicle_banks.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\vehicle_jobs.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\vehicle_sources.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\vehicle_voices.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\virtual_sources.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\voice_lifecycle.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="backend\voices.cpp">
+      <Filter>backend</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\game_audio_common.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\hooks_install.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\runtime_bootstrap.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\runtime_context.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\stateful_hooks.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\stateful_queries.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\stateful_runtime.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\stateful_sounds.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\vehicle_capture.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\vehicle_reconcile.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\vehicle_runtime.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="modules\weapon_runtime.cpp">
+      <Filter>modules</Filter>
+    </ClCompile>
+    <ClCompile Include="sound_bank.cpp" />
+    <ClCompile Include="weapon_backend.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="audio_config.h" />
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="sound_bank.h" />
+    <ClInclude Include="version.h" />
+    <ClInclude Include="weapon_backend.h" />
+    <ClInclude Include="backend\backend.h">
+      <Filter>backend</Filter>
+    </ClInclude>
+    <ClInclude Include="backend\core.h">
+      <Filter>backend</Filter>
+    </ClInclude>
+    <ClInclude Include="backend\prelude.h">
+      <Filter>backend</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\game_audio_common.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\modules.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\prelude.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\runtime_bootstrap.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\runtime_context.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\stateful_runtime.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\vehicle_capture.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\vehicle_runtime.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+    <ClInclude Include="modules\weapon_runtime.h">
+      <Filter>modules</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="AudioRuntime.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\.github\workflows\release.yml" />
+    <None Include="..\CHANGELOG.md" />
+    <None Include="..\LICENSE" />
+    <None Include="..\README.md" />
+    <None Include="..\Config\AudioRuntime.ini" />
+  </ItemGroup>
+</Project>

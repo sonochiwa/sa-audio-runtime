@@ -1,36 +1,17 @@
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
+// GTA San Andreas mixes its weapon, vehicle, dialogue and world sounds on
+// the game thread through the stock sound bank path, which is where the
+// hitching and the clipped or missing samples come from on today's
+// hardware. Audio Runtime hooks the sound requests, classifies them, and
+// hands the ones it owns to a backend thread that plays the same samples
+// through DirectSound with its own voices, loops, fades and listener
+// transform, while everything it does not own keeps going through the game.
+// The ModLoader companion feeds WAV replacements and pack sources in through
+// the exported callbacks below.
 
-#include <windows.h>
-#include <MinHook.h>
-
-#include "audio_config.h"
+#include "modules/modules.h"
 #include "weapon_backend.h"
 
-#include <algorithm>
-#include <array>
-#include <cmath>
-#include <cstdint>
-#include <cstring>
-#include <map>
-#include <set>
-
-namespace {
-
-#include "modules/runtime_context.inl"
-
-#include "modules/game_audio_common.inl"
-#include "modules/weapon_runtime.inl"
-#include "modules/vehicle_capture.inl"
-#include "modules/stateful_runtime.inl"
-#include "modules/vehicle_runtime.inl"
-#include "modules/runtime_bootstrap.inl"
-
-} // namespace
+using namespace runtime;
 
 extern "C" __declspec(dllexport) void __cdecl
 AudioRuntimeModLoaderSample(

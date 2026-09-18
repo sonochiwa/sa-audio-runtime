@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -49,87 +49,131 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <ExceptionHandling>Async</ExceptionHandling>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>dsound.lib;dxguid.lib;winmm.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateMapFile>true</GenerateMapFile>
-      <MapFileName>$(OutDir)$(TargetName).map</MapFileName>
+      <AdditionalDependencies>dsound.lib;dxguid.lib;winmm.lib;user32.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <ExceptionHandling>Async</ExceptionHandling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>false</GenerateDebugInformation>
-      <AdditionalDependencies>dsound.lib;dxguid.lib;winmm.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateMapFile>true</GenerateMapFile>
-      <MapFileName>$(OutDir)$(TargetName).map</MapFileName>
+      <AdditionalDependencies>dsound.lib;dxguid.lib;winmm.lib;user32.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <PostBuildEvent>
-      <Command>copy /Y "$(SolutionDir)Config\AudioRuntime.ini" "$(OutDir)AudioRuntime.ini"</Command>
-    </PostBuildEvent>
   </ItemDefinitionGroup>
 
   <ItemGroup>
+    <ClCompile Include="AudioRuntime.cpp" />
     <ClCompile Include="audio_config.cpp" />
-    <ClCompile Include="main.cpp" />
+    <ClCompile Include="backend\buffers.cpp" />
+    <ClCompile Include="backend\core.cpp" />
+    <ClCompile Include="backend\device.cpp" />
+    <ClCompile Include="backend\dialogue.cpp" />
+    <ClCompile Include="backend\guns.cpp" />
+    <ClCompile Include="backend\listener.cpp" />
+    <ClCompile Include="backend\thread.cpp" />
+    <ClCompile Include="backend\vehicle_banks.cpp" />
+    <ClCompile Include="backend\vehicle_jobs.cpp" />
+    <ClCompile Include="backend\vehicle_sources.cpp" />
+    <ClCompile Include="backend\vehicle_voices.cpp" />
+    <ClCompile Include="backend\virtual_sources.cpp" />
+    <ClCompile Include="backend\voice_lifecycle.cpp" />
+    <ClCompile Include="backend\voices.cpp" />
+    <ClCompile Include="modules\game_audio_common.cpp" />
+    <ClCompile Include="modules\hooks_install.cpp" />
+    <ClCompile Include="modules\runtime_bootstrap.cpp" />
+    <ClCompile Include="modules\runtime_context.cpp" />
+    <ClCompile Include="modules\stateful_hooks.cpp" />
+    <ClCompile Include="modules\stateful_queries.cpp" />
+    <ClCompile Include="modules\stateful_runtime.cpp" />
+    <ClCompile Include="modules\stateful_sounds.cpp" />
+    <ClCompile Include="modules\vehicle_capture.cpp" />
+    <ClCompile Include="modules\vehicle_reconcile.cpp" />
+    <ClCompile Include="modules\vehicle_runtime.cpp" />
+    <ClCompile Include="modules\weapon_runtime.cpp" />
     <ClCompile Include="sound_bank.cpp" />
     <ClCompile Include="weapon_backend.cpp" />
     <ClCompile Include="..\vendor\minhook\src\buffer.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\vendor\minhook\src\hook.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\vendor\minhook\src\trampoline.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\vendor\minhook\src\hde\hde32.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
   </ItemGroup>
-
   <ItemGroup>
     <ClInclude Include="audio_config.h" />
-    <ClInclude Include="modules\game_audio_common.inl" />
-    <ClInclude Include="modules\runtime_bootstrap.inl" />
-    <ClInclude Include="modules\runtime_context.inl" />
-    <ClInclude Include="modules\stateful_runtime.inl" />
-    <ClInclude Include="modules\vehicle_capture.inl" />
-    <ClInclude Include="modules\vehicle_runtime.inl" />
-    <ClInclude Include="modules\weapon_runtime.inl" />
+    <ClInclude Include="resource.h" />
     <ClInclude Include="sound_bank.h" />
+    <ClInclude Include="version.h" />
     <ClInclude Include="weapon_backend.h" />
+    <ClInclude Include="backend\backend.h" />
+    <ClInclude Include="backend\core.h" />
+    <ClInclude Include="backend\prelude.h" />
+    <ClInclude Include="modules\game_audio_common.h" />
+    <ClInclude Include="modules\modules.h" />
+    <ClInclude Include="modules\prelude.h" />
+    <ClInclude Include="modules\runtime_bootstrap.h" />
+    <ClInclude Include="modules\runtime_context.h" />
+    <ClInclude Include="modules\stateful_runtime.h" />
+    <ClInclude Include="modules\vehicle_capture.h" />
+    <ClInclude Include="modules\vehicle_runtime.h" />
+    <ClInclude Include="modules\weapon_runtime.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="AudioRuntime.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\.github\workflows\release.yml" />
     <None Include="..\CHANGELOG.md" />
-    <None Include="..\Config\AudioRuntime.ini" />
     <None Include="..\LICENSE" />
     <None Include="..\README.md" />
+    <None Include="..\Config\AudioRuntime.ini" />
   </ItemGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <Target Name="CopyReleaseConfig" AfterTargets="Build"
+          Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Copy SourceFiles="$(SolutionDir)Config\AudioRuntime.ini"
+          DestinationFolder="$(OutDir)" />
+  </Target>
 </Project>

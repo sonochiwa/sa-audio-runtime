@@ -1,0 +1,43 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="bridge" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="AudioRuntime.ModLoader.cpp" />
+    <ClCompile Include="bridge\core.cpp">
+      <Filter>bridge</Filter>
+    </ClCompile>
+    <ClCompile Include="bridge\delivery.cpp">
+      <Filter>bridge</Filter>
+    </ClCompile>
+    <ClCompile Include="bridge\paths.cpp">
+      <Filter>bridge</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="bridge\bridge.h">
+      <Filter>bridge</Filter>
+    </ClInclude>
+    <ClInclude Include="bridge\core.h">
+      <Filter>bridge</Filter>
+    </ClInclude>
+    <ClInclude Include="bridge\modloader_api.h">
+      <Filter>bridge</Filter>
+    </ClInclude>
+    <ClInclude Include="bridge\prelude.h">
+      <Filter>bridge</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="version.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="AudioRuntime.ModLoader.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\.github\workflows\release.yml" />
+    <None Include="..\CHANGELOG.md" />
+    <None Include="..\LICENSE" />
+    <None Include="..\README.md" />
+  </ItemGroup>
+</Project>

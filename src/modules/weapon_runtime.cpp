@@ -1,3 +1,7 @@
+#include "modules/modules.h"
+
+namespace runtime {
+
 AudioJob BuildGunAudioJob(
     void* self,
     void* entity,
@@ -337,3 +341,4 @@ void __fastcall HookPlayBulletHitSound(
     }
 }
 
+} // namespace runtime

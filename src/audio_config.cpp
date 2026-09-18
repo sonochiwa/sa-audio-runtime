@@ -1,5 +1,7 @@
 #include "audio_config.h"
 
+#include "resource.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -26,6 +28,8 @@ std::atomic<bool> gCharacterEffectsEnabled{true};
 std::atomic<bool> gExplosionsEnabled{true};
 std::atomic<bool> gWorldAmbienceEnabled{true};
 std::atomic<bool> gMiscEffectsEnabled{true};
+
+HMODULE gModule{};
 
 std::string GetModuleDirectory(HMODULE module) {
     char path[MAX_PATH]{};
@@ -106,45 +110,19 @@ void WriteBoolean(const char* section, const char* key, bool value) {
     WriteInteger(section, key, value ? 1 : 0);
 }
 
+// Writes the RCDATA copy of Config\AudioRuntime.ini byte for byte. A
+// master switch migrated from an older configuration is written afterwards
+// through the profile API, so only a migrated file differs from the
+// canonical one.
 void CreateDefaultConfiguration(bool enabled) {
-    char text[1024]{};
-    const int length = std::snprintf(
-        text,
-        sizeof(text),
-        "# SA Audio Runtime v2.1.2\r\n"
-        "# Created by sonochiwa\r\n"
-        "# Source code: https://github.com/sonochiwa/sa-audio-runtime\r\n"
-        "# Default toggle hotkey: Alt + Y\r\n"
-        "\r\n"
-        "[general]\r\n"
-        "isEnabled=%d\r\n"
-        "hotkeyEnabled=1\r\n"
-        "hotkeyModifier=18\r\n"
-        "hotkeyKey=89\r\n"
-        "showNotifications=1\r\n"
-        "\r\n"
-        "[weaponAudio]\r\n"
-        "gunshots=1\r\n"
-        "bulletImpacts=1\r\n"
-        "effects=1\r\n"
-        "\r\n"
-        "[vehicleAudio]\r\n"
-        "engines=1\r\n"
-        "effects=1\r\n"
-        "collisions=1\r\n"
-        "\r\n"
-        "[characterAudio]\r\n"
-        "dialogues=1\r\n"
-        "scanner=1\r\n"
-        "effects=1\r\n"
-        "\r\n"
-        "[worldAudio]\r\n"
-        "explosions=1\r\n"
-        "ambience=1\r\n"
-        "miscEffects=1\r\n",
-        enabled ? 1 : 0
-    );
-    if (length <= 0 || length >= static_cast<int>(sizeof(text))) {
+    const HRSRC resource = FindResourceW(gModule, MAKEINTRESOURCEW(IDR_DEFAULT_INI), RT_RCDATA);
+    if (!resource) {
+        return;
+    }
+    const HGLOBAL handle = LoadResource(gModule, resource);
+    const DWORD size = SizeofResource(gModule, resource);
+    const void* data = handle ? LockResource(handle) : nullptr;
+    if (!data || size == 0) {
         return;
     }
 
@@ -162,14 +140,12 @@ void CreateDefaultConfiguration(bool enabled) {
     }
 
     DWORD written{};
-    WriteFile(
-        file,
-        text,
-        static_cast<DWORD>(length),
-        &written,
-        nullptr
-    );
+    WriteFile(file, data, size, &written, nullptr);
     CloseHandle(file);
+
+    if (!enabled) {
+        WriteBoolean("general", "isEnabled", false);
+    }
 }
 
 void ReadConfiguration(bool migratedEnabled) {
@@ -365,6 +341,7 @@ void ReadConfiguration(bool migratedEnabled) {
 } // namespace
 
 void AudioConfigInitialize(HMODULE module) {
+    gModule = module;
     const auto directory = GetModuleDirectory(module);
     std::snprintf(
         gPath,

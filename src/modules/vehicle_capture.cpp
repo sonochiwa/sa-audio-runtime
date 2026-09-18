@@ -1,3 +1,7 @@
+#include "modules/modules.h"
+
+namespace runtime {
+
 std::uint64_t GetVehicleProxyKey(
     void* owner,
     std::int32_t soundType
@@ -123,16 +127,6 @@ bool IsVehicleEngineRendererEnabled() {
 bool IsVehicleEffectRendererEnabled() {
     return VehicleBackendShouldReplaceOriginal() &&
            AudioConfigVehicleEffectsEnabled();
-}
-
-template<typename T>
-T ReadProxyField(
-    const VehicleSoundProxy& proxy,
-    std::size_t offset
-) {
-    T value{};
-    std::memcpy(&value, proxy.sound.data() + offset, sizeof(value));
-    return value;
 }
 
 bool HandleVehicleCompletion(const AudioCompletion& completion) {
@@ -273,10 +267,4 @@ void PublishVehicleUpdate(VehicleSoundProxy& proxy) {
     VehicleBackendEnqueue(job);
 }
 
-template<typename T>
-T ReadSoundField(const std::uint8_t* sound, std::size_t offset) {
-    T value{};
-    std::memcpy(&value, sound + offset, sizeof(value));
-    return value;
-}
-
+} // namespace runtime
