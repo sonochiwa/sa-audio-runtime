@@ -16,16 +16,15 @@ void EndVehicleCapture() {
 }
 
 bool IsDialogueRendererEnabled() {
-    return AudioConfigIsEnabled() && AudioConfigDialoguesEnabled();
+    return AudioConfigIsEnabled();
 }
 
 bool IsScannerRendererEnabled() {
-    return AudioConfigIsEnabled() && AudioConfigScannerEnabled();
+    return AudioConfigIsEnabled();
 }
 
 bool IsEffectsRendererEnabled() {
-    return AudioConfigIsEnabled() &&
-           AudioConfigMiscEffectsEnabled();
+    return AudioConfigIsEnabled();
 }
 
 bool IsAudioRuntimePaused() {
@@ -70,23 +69,8 @@ bool ResolveLoadedBank(std::int16_t bankSlot, std::int16_t& bankId) {
     }
 }
 
-bool IsStatefulModuleEnabled(StatefulSoundModule module) {
-    if (!AudioConfigIsEnabled()) {
-        return false;
-    }
-    switch (module) {
-    case StatefulSoundModule::Explosions:
-        return AudioConfigExplosionsEnabled();
-    case StatefulSoundModule::WeaponEffects:
-        return AudioConfigWeaponEffectsEnabled();
-    case StatefulSoundModule::VehicleCollisions:
-        return AudioConfigVehicleCollisionsEnabled();
-    case StatefulSoundModule::Characters:
-        return AudioConfigCharacterEffectsEnabled();
-    case StatefulSoundModule::WorldAmbience:
-        return AudioConfigWorldAmbienceEnabled();
-    }
-    return false;
+bool IsStatefulModuleEnabled(StatefulSoundModule) {
+    return AudioConfigIsEnabled();
 }
 
 bool ClassifyStatefulSound(

@@ -80,7 +80,7 @@ replacements are supported.
 ## Configuration
 
 ```ini
-# Audio Runtime v2.2.0
+# Audio Runtime v2.3.0
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-audio-runtime
 # Default toggle hotkey: Alt + Y
@@ -90,64 +90,19 @@ isEnabled=1
 hotkeyEnabled=1
 hotkeyModifier=18
 hotkeyKey=89
-showNotifications=1
-
-[weaponAudio]
-gunshots=1
-bulletImpacts=1
-effects=1
-
-[vehicleAudio]
-engines=1
-effects=1
-collisions=1
-
-[characterAudio]
-dialogues=1
-scanner=1
-effects=1
-
-[worldAudio]
-explosions=1
-ambience=1
-miscEffects=1
 ```
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `[general]` | | |
-| `isEnabled` | `1` | Master state for runtime renderers. |
-| `hotkeyEnabled` | `1` | Enables runtime hotkey polling. |
+| `isEnabled` | `1` | Runtime state. Written back when the hotkey toggles it. |
+| `hotkeyEnabled` | `1` | Polls the toggle hotkey. |
 | `hotkeyModifier` | `18` | Modifier virtual-key code; `18` is Alt and `0` disables the modifier. |
 | `hotkeyKey` | `89` | Main virtual-key code; `89` is Y. |
-| `showNotifications` | `1` | Shows enabled/disabled messages. |
-| `[weaponAudio]` | | |
-| `gunshots` | `1` | Uses the worker renderer for weapon shots and minigun states. |
-| `bulletImpacts` | `1` | Uses the worker renderer for material-dependent bullet impacts. |
-| `effects` | `1` | Uses the worker renderer for reloads, mechanics and stateful weapon loops. |
-| `[vehicleAudio]` | | |
-| `engines` | `1` | Uses the worker renderer for player and traffic engine voices. |
-| `effects` | `1` | Uses the worker renderer for road, tires, reverse, skids, horns, sirens and supported vehicle one-shots. |
-| `collisions` | `1` | Uses the worker renderer for collisions, glass, water contact and doors. |
-| `[characterAudio]` | | |
-| `dialogues` | `1` | Uses the worker renderer for supported speech and scripted dialogue. |
-| `scanner` | `1` | Uses the worker renderer for police-scanner dialogue. |
-| `effects` | `1` | Uses the worker renderer for footsteps, movement and character effects. |
-| `[worldAudio]` | | |
-| `explosions` | `1` | Uses the worker renderer for explosions and projectile layers. |
-| `ambience` | `1` | Uses the worker renderer for supported weather, fire, water and script ambience. |
-| `miscEffects` | `1` | Uses the worker renderer for safe uncategorized one-shot effects. |
 
-Press Alt+Y to reload the INI and switch the runtime between enabled and
-disabled. The new state is written to `isEnabled` and restored on the next
-launch.
-
-When `hotkeyEnabled=0`, or when `hotkeyKey` is missing or `0`, no toggle key is
-polled. Configuration changes then require a game restart. Setting a module to
-`0` returns that audio family to GTA's original audio engine. Existing
-capitalized section names remain compatible because Windows INI lookup is
-case-insensitive. Legacy `[Modules]` configurations are migrated automatically
-to the categorized sections when the plugin reads the INI.
+Press Alt+Y to switch the runtime between enabled and disabled. The new state
+is shown on screen, written to `isEnabled` and restored on the next launch.
+When `hotkeyEnabled=0`, or when `hotkeyKey` is missing or `0`, no key is
+polled and `isEnabled` is read once at startup.
 
 ## Building
 

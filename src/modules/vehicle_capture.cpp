@@ -120,13 +120,11 @@ VehicleSoundProxy* FindVehicleProxy(
 }
 
 bool IsVehicleEngineRendererEnabled() {
-    return VehicleBackendShouldReplaceOriginal() &&
-           AudioConfigVehicleEnginesEnabled();
+    return VehicleBackendShouldReplaceOriginal();
 }
 
 bool IsVehicleEffectRendererEnabled() {
-    return VehicleBackendShouldReplaceOriginal() &&
-           AudioConfigVehicleEffectsEnabled();
+    return VehicleBackendShouldReplaceOriginal();
 }
 
 bool HandleVehicleCompletion(const AudioCompletion& completion) {

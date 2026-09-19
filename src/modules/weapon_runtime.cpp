@@ -100,9 +100,7 @@ void __fastcall HookPlayGunSounds(
     );
     const auto lastFireTimeBefore = *lastFireTime;
 
-    const bool replaceOriginal =
-        WeaponBackendShouldReplaceOriginal() &&
-        AudioConfigGunshotsEnabled();
+    const bool replaceOriginal = WeaponBackendShouldReplaceOriginal();
     if (replaceOriginal) {
         const auto gameTimeMs =
             *reinterpret_cast<const volatile std::uint32_t*>(kGameTimeMsAddress);
@@ -168,8 +166,7 @@ void __fastcall HookPlayMinigunFireSounds(
     void* entity,
     std::int32_t audioEventId
 ) {
-    if (!WeaponBackendShouldReplaceOriginal() ||
-        !AudioConfigGunshotsEnabled()) {
+    if (!WeaponBackendShouldReplaceOriginal()) {
         gOriginalPlayMinigunFireSounds(self, entity, audioEventId);
         return;
     }
@@ -255,7 +252,6 @@ void __fastcall HookPlayBulletHitSound(
     float angle
 ) {
     if (!WeaponBackendShouldReplaceOriginal() ||
-        !AudioConfigBulletImpactsEnabled() ||
         !position ||
         surface < 0 ||
         surface >= kCollisionSurfaceCount) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.0
+
+- Removed the per-module switches and `showNotifications`; only the toggle
+  hotkey remains and the state message is always shown.
+
 ## 2.2.0
 
 - Changed the public name to Audio Runtime; the INI header and the release

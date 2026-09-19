@@ -3,9 +3,6 @@
 namespace runtime {
 
 void ShowBackendState(bool enabled) {
-    if (!AudioConfigShowNotifications()) {
-        return;
-    }
     reinterpret_cast<AddMessageJumpFn>(kAddMessageJumpAddress)(
         enabled
             ? "~g~Audio Runtime: enabled"
@@ -69,10 +66,7 @@ void __fastcall HookAudioEngineService(void* self, void*) {
 }
 
 bool IsWeaponRendererEnabled() {
-    return
-        AudioConfigIsEnabled() &&
-        (AudioConfigGunshotsEnabled() ||
-         AudioConfigBulletImpactsEnabled());
+    return AudioConfigIsEnabled();
 }
 
 bool InstallRequestNewSoundHotpatch() {
@@ -185,22 +179,8 @@ void ApplyRuntimeState() {
     WeaponBackendSetEnabled(
         IsWeaponRendererEnabled()
     );
-    VehicleBackendSetEnabled(
-        AudioConfigIsEnabled() &&
-        (AudioConfigVehicleEnginesEnabled() ||
-         AudioConfigVehicleEffectsEnabled())
-    );
-    DialogueBackendSetEnabled(
-        AudioConfigIsEnabled() &&
-        (AudioConfigDialoguesEnabled() ||
-         AudioConfigScannerEnabled() ||
-         AudioConfigMiscEffectsEnabled() ||
-         AudioConfigExplosionsEnabled() ||
-         AudioConfigWeaponEffectsEnabled() ||
-         AudioConfigVehicleCollisionsEnabled() ||
-         AudioConfigCharacterEffectsEnabled() ||
-         AudioConfigWorldAmbienceEnabled())
-    );
+    VehicleBackendSetEnabled(AudioConfigIsEnabled());
+    DialogueBackendSetEnabled(AudioConfigIsEnabled());
 }
 
 } // namespace runtime

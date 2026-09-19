@@ -212,10 +212,7 @@ void ServiceDialogueProxies() {
     for (auto proxy = gDialogueSoundProxies.begin();
          proxy != gDialogueSoundProxies.end();) {
         auto& value = proxy->second;
-        const bool moduleEnabled = AudioConfigIsEnabled() &&
-            (value.isScanner
-                ? AudioConfigScannerEnabled()
-                : AudioConfigDialoguesEnabled());
+        const bool moduleEnabled = AudioConfigIsEnabled();
         if (!moduleEnabled) {
             const auto identity =
                 GetDialogueProxyIdentity(proxy->first, value);
