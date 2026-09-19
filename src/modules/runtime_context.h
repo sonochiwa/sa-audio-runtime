@@ -208,7 +208,6 @@ extern CancelOwnedSoundsFn gOriginalCancelOwnedSounds;
 extern AudioEntityTerminateFn gOriginalPedSpeechTerminate;
 extern AudioEntityTerminateFn gOriginalPedlessSpeechTerminate;
 extern AudioEntityDestructorFn gOriginalPoliceScannerDestructor;
-extern bool gHotkeyWasDown;
 
 constexpr std::size_t kVehicleEngineSoundCount = 12;
 constexpr std::size_t kVehicleAudioStateOffset = 0xA9;

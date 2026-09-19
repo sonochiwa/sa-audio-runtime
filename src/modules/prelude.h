@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio_config.h"
+#include "cheat_command.h"
 #include "weapon_backend.h"
 
 #include "MinHook.h"

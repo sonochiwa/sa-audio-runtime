@@ -13,10 +13,6 @@ void ShowBackendState(bool enabled) {
     );
 }
 
-bool IsVirtualKeyDown(int key) {
-    return key != 0 && (GetAsyncKeyState(key) & 0x8000) != 0;
-}
-
 void ResetRuntimeSources() {
     gVehicleSoundProxies.clear();
     gVehicleAudioOwners.clear();
@@ -31,25 +27,18 @@ void __fastcall HookAudioEngineReset(void* self, void*) {
     ResetRuntimeSources();
 }
 
-void ServiceToggleHotkey() {
-    if (!AudioConfigHotkeyEnabled()) {
-        gHotkeyWasDown = false;
+void ServiceToggleCommand() {
+    // Runs on the game thread once the window exists, so the keyboard hook
+    // goes in from here.
+    CheatCommandInstall();
+    if (!CheatCommandConsume()) {
         return;
     }
-
-    const int key = AudioConfigHotkeyKey();
-    const int modifier = AudioConfigHotkeyModifier();
-    const bool hotkeyDown =
-        IsVirtualKeyDown(key) &&
-        (modifier == 0 || IsVirtualKeyDown(modifier));
-    if (hotkeyDown && !gHotkeyWasDown) {
-        AudioConfigReload();
-        const bool enabled = !AudioConfigIsEnabled();
-        AudioConfigSetEnabled(enabled);
-        ApplyRuntimeState();
-        ShowBackendState(enabled);
-    }
-    gHotkeyWasDown = hotkeyDown;
+    AudioConfigReload();
+    const bool enabled = !AudioConfigIsEnabled();
+    AudioConfigSetEnabled(enabled);
+    ApplyRuntimeState();
+    ShowBackendState(enabled);
 }
 
 void __fastcall HookAudioEngineService(void* self, void*) {
@@ -62,7 +51,7 @@ void __fastcall HookAudioEngineService(void* self, void*) {
             kCanSeeOutsideAddress
         )()
     );
-    ServiceToggleHotkey();
+    ServiceToggleCommand();
 }
 
 bool IsWeaponRendererEnabled() {

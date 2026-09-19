@@ -91,6 +91,7 @@
   <ItemGroup>
     <ClCompile Include="AudioRuntime.cpp" />
     <ClCompile Include="audio_config.cpp" />
+    <ClCompile Include="cheat_command.cpp" />
     <ClCompile Include="backend\buffers.cpp" />
     <ClCompile Include="backend\core.cpp" />
     <ClCompile Include="backend\device.cpp" />
@@ -142,6 +143,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="audio_config.h" />
+    <ClInclude Include="cheat_command.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="sound_bank.h" />
     <ClInclude Include="version.h" />

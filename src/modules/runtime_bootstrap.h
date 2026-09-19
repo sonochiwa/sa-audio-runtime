@@ -5,10 +5,9 @@
 namespace runtime {
 
 void ShowBackendState(bool enabled);
-bool IsVirtualKeyDown(int key);
 void ResetRuntimeSources();
 void __fastcall HookAudioEngineReset(void* self, void*);
-void ServiceToggleHotkey();
+void ServiceToggleCommand();
 void __fastcall HookAudioEngineService(void* self, void*);
 bool IsWeaponRendererEnabled();
 bool InstallRequestNewSoundHotpatch();

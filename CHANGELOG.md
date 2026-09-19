@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.0
+
+- Changed the toggle to a word typed in game, `AUDIORUNTIME` by default;
+  the hotkey keys are gone.
+- Added `README.txt` to the release archive.
+
 ## 2.3.0
 
 - Removed the per-module switches and `showNotifications`; only the toggle

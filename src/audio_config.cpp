@@ -1,8 +1,9 @@
 #include "audio_config.h"
 
+#include "cheat_command.h"
+
 #include "resource.h"
 
-#include <algorithm>
 #include <initializer_list>
 #include <atomic>
 #include <cstdio>
@@ -13,9 +14,6 @@ namespace {
 
 char gPath[MAX_PATH]{};
 std::atomic<bool> gEnabled{true};
-std::atomic<bool> gHotkeyEnabled{true};
-std::atomic<int> gHotkeyKey{0};
-std::atomic<int> gHotkeyModifier{VK_MENU};
 
 HMODULE gModule{};
 
@@ -95,43 +93,27 @@ void ReadConfiguration(bool migratedEnabled) {
         "isEnabled",
         migratedEnabled
     );
-    const bool hotkeyEnabled = ReadBoolean(
+    // A missing key keeps the compiled default; a present empty one
+    // disables the command rather than falling back to it.
+    char command[32]{};
+    GetPrivateProfileStringA(
         "general",
-        "hotkeyEnabled",
-        true
-    );
-    const int hotkeyKey = std::clamp(
-        static_cast<int>(GetPrivateProfileIntA(
-            "general",
-            "hotkeyKey",
-            0,
-            gPath
-        )),
-        0,
-        255
-    );
-    const int hotkeyModifier = std::clamp(
-        static_cast<int>(GetPrivateProfileIntA(
-            "general",
-            "hotkeyModifier",
-            VK_MENU,
-            gPath
-        )),
-        0,
-        255
+        "command",
+        "AUDIORUNTIME",
+        command,
+        sizeof(command),
+        gPath
     );
     gEnabled.store(enabled, std::memory_order_release);
-    gHotkeyEnabled.store(hotkeyEnabled, std::memory_order_release);
-    gHotkeyKey.store(hotkeyKey, std::memory_order_release);
-    gHotkeyModifier.store(hotkeyModifier, std::memory_order_release);
+    CheatCommandSetWord(command);
     WriteBoolean("general", "isEnabled", enabled);
-    WriteBoolean("general", "hotkeyEnabled", hotkeyEnabled);
-    WriteInteger("general", "hotkeyModifier", hotkeyModifier);
-    WriteInteger("general", "hotkeyKey", hotkeyKey);
+    WritePrivateProfileStringA("general", "command", command, gPath);
     for (const char* section : {"modules", "weaponAudio", "vehicleAudio", "characterAudio", "worldAudio"}) {
         WritePrivateProfileStringA(section, nullptr, nullptr, gPath);
     }
-    WritePrivateProfileStringA("general", "ReloadCommand", nullptr, gPath);
+    for (const char* key : {"ReloadCommand", "showNotifications", "hotkeyEnabled", "hotkeyModifier", "hotkeyKey"}) {
+        WritePrivateProfileStringA("general", key, nullptr, gPath);
+    }
 }
 
 } // namespace
@@ -185,16 +167,4 @@ bool AudioConfigIsEnabled() {
 void AudioConfigSetEnabled(bool enabled) {
     gEnabled.store(enabled, std::memory_order_release);
     WriteBoolean("general", "isEnabled", enabled);
-}
-
-bool AudioConfigHotkeyEnabled() {
-    return gHotkeyEnabled.load(std::memory_order_acquire);
-}
-
-int AudioConfigHotkeyKey() {
-    return gHotkeyKey.load(std::memory_order_acquire);
-}
-
-int AudioConfigHotkeyModifier() {
-    return gHotkeyModifier.load(std::memory_order_acquire);
 }

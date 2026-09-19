@@ -26,7 +26,6 @@ CancelOwnedSoundsFn gOriginalCancelOwnedSounds{};
 AudioEntityTerminateFn gOriginalPedSpeechTerminate{};
 AudioEntityTerminateFn gOriginalPedlessSpeechTerminate{};
 AudioEntityDestructorFn gOriginalPoliceScannerDestructor{};
-bool gHotkeyWasDown{};
 
 std::map<std::uint64_t, VehicleSoundProxy> gVehicleSoundProxies;
 std::set<void*> gVehicleAudioOwners;

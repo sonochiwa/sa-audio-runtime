@@ -18,7 +18,10 @@ stays with the game's engine.
 - Original samples, material selection, positioning and attenuation.
 - Falls back to the game's renderer when disabled.
 - Optional ModLoader companion for WAV and SFX-pack replacements.
-- Alt+Y toggle with an on-screen state message.
+- Switched on and off by typing `AUDIORUNTIME` in game, with an on-screen
+  state message.
+- Verifies the bytes it replaces before writing and refuses to patch any
+  other executable.
 
 ## Requirements
 
@@ -27,7 +30,7 @@ stays with the game's engine.
 - An ASI loader, such as Silent's ASI Loader or Ultimate ASI Loader.
 - ModLoader, only for WAV and SFX-pack replacement through the companion.
 
-Other executable versions are left untouched.
+Other executables are left untouched.
 
 ## Installation
 
@@ -52,30 +55,17 @@ complete `FEET`, `GENRL`, `PAIN_A`, `SCRIPT` and `SPC_*` archives and
 
 ## Configuration
 
-```ini
-# Audio Runtime v2.3.0
-# Created by sonochiwa
-# Source code: https://github.com/sonochiwa/sa-audio-runtime
-# Default toggle hotkey: Alt + Y
-
-[general]
-isEnabled=1
-hotkeyEnabled=1
-hotkeyModifier=18
-hotkeyKey=89
-```
+`AudioRuntime.ini` next to the plugin, created with these defaults when it is
+missing:
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `isEnabled` | `1` | Runtime state. Written back when the hotkey toggles it. |
-| `hotkeyEnabled` | `1` | Polls the toggle hotkey. |
-| `hotkeyModifier` | `18` | Modifier virtual-key code; `18` is Alt and `0` disables the modifier. |
-| `hotkeyKey` | `89` | Main virtual-key code; `89` is Y. |
+| `isEnabled` | `1` | Runtime state. Written back when the command toggles it. |
+| `command` | `AUDIORUNTIME` | Word that switches the runtime on or off when typed in game. Empty disables it. |
 
-Press Alt+Y to switch the runtime between enabled and disabled. The new state
-is shown on screen, written to `isEnabled` and restored on the next launch.
-When `hotkeyEnabled=0`, or when `hotkeyKey` is missing or `0`, no key is
-polled and `isEnabled` is read once at startup.
+Type the command word in game the way a single-player cheat is typed, with
+the chat box open or closed. The new state is shown on screen, written to
+`isEnabled` and restored on the next launch.
 
 ## Release Integrity
 
