@@ -128,6 +128,7 @@ extern bool gBankSourcesDirty;
 extern bool gDynamicBanksDirty;
 void RequestDeviceRecovery();
 bool AudioCallSucceeded(HRESULT result);
+bool IsRuntimeStopJob(AudioJobType type);
 bool IsCoalescedSourceJob(AudioJobType type);
 std::uint64_t GetCoalescedJobKey(const AudioJob& job);
 void TakeCoalescedJobs(std::vector<AudioJob>& jobs);
@@ -196,6 +197,11 @@ bool InitialiseListener( IDirectSound8* directSound, IDirectSound3DListener** ou
 bool CreateAudioDevice( IDirectSound8** directSoundOutput, IDirectSound3DListener** listenerOutput );
 bool IsAudioDeviceHealthy(IDirectSound8* directSound);
 void ReleaseBaseBuffers( std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& buffers );
+extern std::atomic<std::uint32_t> gVehicleSourceTimeouts;
+extern std::atomic<std::uint32_t> gMinigunStops;
+extern std::atomic<std::uint32_t> gStartFailures;
+extern std::atomic<std::int32_t> gLastFailedStart;
+void PublishDebugSnapshot( const std::vector<Voice>& voices, std::size_t vehicleSources, std::size_t minigunSources, std::size_t virtualSources );
 DWORD WINAPI BackendThread(void*);
 
 } // namespace backend

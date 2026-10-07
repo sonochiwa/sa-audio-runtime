@@ -46,5 +46,6 @@ void __fastcall HookCancelEventPhysicalSounds( void* self, void*, std::int16_t e
 void __fastcall HookCancelBankSlotSounds( void* self, void*, std::int16_t bankSlot, bool fullStop );
 void __fastcall HookCancelOwnedSounds( void* self, void*, void* owner, bool fullStop );
 void* __fastcall HookRequestNewSound( void* self, void*, void* sound );
+void* RouteNewSound(void* self, void* sound);
 
 } // namespace runtime

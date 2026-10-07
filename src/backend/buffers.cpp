@@ -175,7 +175,9 @@ void ApplyPendingOverrides(
     for (std::size_t index = 0; index < kMaxOriginalSounds; ++index) {
         if (gOverrideActions[bankIndex][index] != 0) {
             actions[index] = gOverrideActions[bankIndex][index];
-            paths[index] = std::move(gOverridePaths[bankIndex][index]);
+            // Copied, not moved: a later reload of the bank sources rebuilds
+            // the banks from gOverridePaths (ApplyCurrentOverrides).
+            paths[index] = gOverridePaths[bankIndex][index];
             gOverrideActions[bankIndex][index] = 0;
         }
     }

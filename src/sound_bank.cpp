@@ -14,6 +14,7 @@ constexpr std::size_t kPakFilenameSize = 12;
 constexpr std::size_t kMaxSounds = 400;
 constexpr std::size_t kSoundInfoSize = 12;
 constexpr std::size_t kBankHeaderSize = 4 + kMaxSounds * kSoundInfoSize;
+constexpr std::uint16_t kWaveFormatExtensible = 0xFFFE;
 
 std::uint16_t ReadU16(const std::uint8_t* data) {
     std::uint16_t value{};
@@ -48,6 +49,18 @@ bool ReadExact(
         static_cast<std::streamsize>(size)
     );
     return stream.good() || static_cast<std::size_t>(stream.gcount()) == size;
+}
+
+// Bytes left after the read position; sizes read from a file are checked
+// against it before anything is allocated for them.
+std::uint64_t RemainingBytes(std::ifstream& stream) {
+    const auto position = stream.tellg();
+    if (position < 0 || !stream.seekg(0, std::ios::end)) {
+        return 0;
+    }
+    const auto end = stream.tellg();
+    stream.seekg(position, std::ios::beg);
+    return end > position ? static_cast<std::uint64_t>(end - position) : 0;
 }
 
 } // namespace
@@ -168,6 +181,10 @@ bool OriginalSoundBank::Load(
         return false;
     }
 
+    if (bankDataSize > RemainingBytes(genrl)) {
+        error = "sound bank data runs past the end of " + archivePath;
+        return false;
+    }
     std::vector<std::uint8_t> bankData(bankDataSize);
     if (!ReadExact(genrl, bankData.data(), bankData.size())) {
         error = "cannot read GENRL sound bank PCM data";
@@ -251,10 +268,19 @@ bool OriginalSoundBank::ApplyWaveOverride(
                 return false;
             }
             formatTag = ReadU16(format.data());
+            // WAVE_FORMAT_EXTENSIBLE names the real format in the first two
+            // bytes of its sub-format GUID.
+            if (formatTag == kWaveFormatExtensible && chunkSize >= 26) {
+                formatTag = ReadU16(format.data() + 24);
+            }
             channels = ReadU16(format.data() + 2);
             sampleRate = ReadU32(format.data() + 4);
             bitsPerSample = ReadU16(format.data() + 14);
         } else if (std::memcmp(chunk.data(), "data", 4) == 0) {
+            if (chunkSize > RemainingBytes(wave)) {
+                error = "override data chunk runs past the end of the file";
+                return false;
+            }
             pcm.resize(chunkSize);
             if (!ReadExact(wave, pcm.data(), pcm.size())) {
                 error = "truncated override data chunk";

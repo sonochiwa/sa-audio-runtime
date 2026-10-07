@@ -6,4 +6,5 @@
 #include "modules/vehicle_capture.h"
 #include "modules/stateful_runtime.h"
 #include "modules/vehicle_runtime.h"
+#include "modules/one_shots.h"
 #include "modules/runtime_bootstrap.h"

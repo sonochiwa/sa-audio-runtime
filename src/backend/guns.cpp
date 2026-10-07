@@ -312,6 +312,7 @@ void UpdateMinigunSources(
             continue;
         }
 
+        gMinigunStops.fetch_add(1, std::memory_order_relaxed);
         StopMinigunVoices(voices, source->key, true);
         const auto& job = source->job;
         const auto speed = job.isAircraftWeapon ? 1.8f : 1.0f;

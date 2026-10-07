@@ -1,5 +1,8 @@
 #include "modules/modules.h"
 
+#include "autotest/autotest.h"
+#include "modules/hook_freeze.h"
+
 namespace runtime {
 
 bool InstallHooks() {
@@ -96,6 +99,14 @@ bool InstallHooks() {
             kPedlessSpeechTerminatePrologue
         ) ||
         !Matches(
+            kAudioEngineResetAddress,
+            kAudioEngineResetPrologue
+        ) ||
+        !Matches(
+            kGetSoundBufferAddress,
+            kGetSoundBufferPrologue
+        ) ||
+        !Matches(
             kPoliceScannerDestructorAddress,
             kPoliceScannerDestructorPrologue
         )) {
@@ -113,6 +124,7 @@ bool InstallHooks() {
                 return;
             }
             UninstallRequestNewSoundHotpatch();
+            HookFreezeLock freeze;
             MH_DisableHook(MH_ALL_HOOKS);
             MH_Uninitialize();
         }
@@ -282,8 +294,11 @@ bool InstallHooks() {
         return false;
     }
 
-    if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
-        return false;
+    {
+        HookFreezeLock freeze;
+        if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
+            return false;
+        }
     }
 
     if (!InstallRequestNewSoundHotpatch()) {
@@ -303,6 +318,9 @@ DWORD WINAPI WorkerThread(void*) {
     if (!InstallHooks()) {
         WeaponBackendStop();
         return 2;
+    }
+    if constexpr (autotest::kAutotestBuild) {
+        autotest::StartAutotest(gModule);
     }
     if (const auto bridge =
             GetModuleHandleA("AudioRuntime.ModLoader.dll")) {

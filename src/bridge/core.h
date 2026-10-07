@@ -36,6 +36,9 @@ extern std::string gLookupPath;
 extern bool gArchiveInstalled;
 extern bool gLookupInstalled;
 extern HMODULE gDeliveredBackend;
+// ModLoader installs files on the game thread while the runtime's start-up
+// thread asks for a replay; every access to the state above holds this lock.
+extern SRWLOCK gStateLock;
 
 struct PackInfo {
     const char* name;
@@ -89,6 +92,7 @@ void Deliver(const SoundReference& reference);
 void DeliverSources();
 void DeliverDynamic( const DynamicSoundReference& reference, const std::string& path, bool installed );
 void DeliverPack(int packId);
+void DeliverAll();
 int StoreFile(const modloader_file_t* file, bool installed);
 const char* __cdecl GetAuthor(modloader_plugin_t*);
 const char* __cdecl GetVersion(modloader_plugin_t*);

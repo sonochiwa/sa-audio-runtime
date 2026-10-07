@@ -1,6 +1,7 @@
 #pragma once
 
 #include "modules/prelude.h"
+#include "modules/sound_pool.h"
 
 namespace runtime {
 
@@ -117,6 +118,10 @@ constexpr std::uint8_t kCancelBankSlotSoundsPrologue[] = {
 constexpr std::uint8_t kCancelOwnedSoundsPrologue[] = {
     0x51, 0x56, 0x57, 0x8D, 0x71, 0x0C
 };
+// CAudioEngine::Reset: push esi; mov esi,ecx; mov ecx,offset AESoundManager.
+constexpr std::uint8_t kAudioEngineResetPrologue[] = {
+    0x56, 0x8B, 0xF1, 0xB9, 0xB0, 0x2C, 0xB6, 0x00
+};
 constexpr std::uint8_t kAudioEngineServicePrologue[] = {
     0x56, 0x57, 0x8B, 0xF1, 0xE9
 };
@@ -209,6 +214,11 @@ extern AudioEntityTerminateFn gOriginalPedSpeechTerminate;
 extern AudioEntityTerminateFn gOriginalPedlessSpeechTerminate;
 extern AudioEntityDestructorFn gOriginalPoliceScannerDestructor;
 
+// Debug autotest: sees every sound request and the sound the request
+// returned to the game (a game slot, a runtime proxy or null).
+using RequestObserverFn = void (*)(const void* request, const void* result);
+extern RequestObserverFn gRequestObserver;
+
 constexpr std::size_t kVehicleEngineSoundCount = 12;
 constexpr std::size_t kVehicleAudioStateOffset = 0xA9;
 constexpr std::size_t kVehicleHornStateOffset = 0xBE;
@@ -223,7 +233,9 @@ constexpr std::size_t kVehicleReverseSoundOffset = 0x170;
 constexpr std::size_t kVehicleHornSoundOffset = 0x178;
 constexpr std::size_t kVehicleSirenSoundOffset = 0x17C;
 constexpr std::size_t kVehicleFastSirenSoundOffset = 0x180;
-constexpr std::size_t kVehicleSurfaceSoundTypeOffset = 0x15C;
+// CAEVehicleAudioEntity::m_SurfaceSoundType (int16), the sound of the skid twin
+// loop; the game restarts the skid only when the wanted type differs from it.
+constexpr std::size_t kVehicleSurfaceSoundTypeOffset = 0x156;
 constexpr std::size_t kVehicleSkidSoundOffset = 0x184;
 constexpr std::size_t kVehicleSkidInUseOffset = 0x20C;
 constexpr std::size_t kVehicleSkidFirstSoundOffset = 0x224;
@@ -246,6 +258,7 @@ constexpr std::int16_t kCopHeliBankSlot = 18;
 constexpr std::int16_t kVehicleGeneralBankSlot = 19;
 constexpr std::int16_t kVehiclePlayerEngineBankSlot = 40;
 constexpr std::size_t kAeSoundSize = 0x74;
+static_assert(kAeSoundSize == kPooledSoundSize);
 constexpr std::size_t kAeSoundBankSlotOffset = 0x0;
 constexpr std::size_t kAeSoundIdOffset = 0x2;
 constexpr std::size_t kAeSoundPhysicalEntityOffset = 0x8;
@@ -280,6 +293,12 @@ constexpr std::uintptr_t kRegisterSoundAddress = 0x4EF820;
 constexpr std::uintptr_t kUpdateSoundParametersAddress = 0x4EFF50;
 constexpr std::uintptr_t kGetRelativeFrequencyAddress = 0x4EF400;
 constexpr std::size_t kHardwareBankLoaderOffset = 0xD98;
+// CAEMP3BankLoader::GetSoundBuffer(int16 sound, int16 bank slot, uint32* size,
+// uint16* sample rate): mov al,[ecx+14h] (m_IsInitialised); ret 10h when unset.
+constexpr std::uintptr_t kGetSoundBufferAddress = 0x4E0280;
+constexpr std::uint8_t kGetSoundBufferPrologue[] = {
+    0x8A, 0x41, 0x14, 0x84, 0xC0, 0x75, 0x05, 0x33, 0xC0, 0xC2, 0x10, 0x00
+};
 constexpr std::size_t kBankSlotSize = 0x12D4;
 constexpr std::size_t kBankSlotBankIdOffset = 0x10;
 constexpr std::size_t kBankLoaderSlotCountOffset = 0x0C;
@@ -307,7 +326,7 @@ constexpr std::uintptr_t kTwinLoopSwapSoundsAddress = 0x4F2C10;
 constexpr std::uintptr_t kTwinLoopDoSoundsSwitchAddress = 0x4F2CA0;
 
 struct VehicleSoundProxy {
-    alignas(4) std::array<std::uint8_t, kAeSoundSize> sound{};
+    PooledSound sound;
     void* owner{};
     std::int32_t soundType{};
     std::int16_t bankId{-1};
@@ -327,7 +346,7 @@ struct VehicleCapture {
 };
 
 struct DialogueSoundProxy {
-    alignas(4) std::array<std::uint8_t, kAeSoundSize> sound{};
+    PooledSound sound;
     void* owner{};
     std::int16_t bankId{-1};
     std::uint32_t generation{};
@@ -347,7 +366,7 @@ enum class StatefulSoundModule : std::uint8_t {
 };
 
 struct StatefulSoundProxy {
-    alignas(4) std::array<std::uint8_t, kAeSoundSize> sound{};
+    PooledSound sound;
     void* owner{};
     std::int16_t bankId{-1};
     std::uint32_t generation{};

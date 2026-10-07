@@ -137,7 +137,9 @@ std::int16_t __fastcall HookAreEventSoundsPlaying(
     if (original != 0) {
         return original;
     }
-    return HasStatefulSound(owner, eventId, nullptr) ? 2 : 0;
+    const bool playing = HasStatefulSound(owner, eventId, nullptr) ||
+                         HasOneShotSound(owner, eventId, -1);
+    return playing ? 2 : 0;
 }
 
 std::int16_t __fastcall HookAreBankSoundsPlaying(
@@ -150,7 +152,9 @@ std::int16_t __fastcall HookAreBankSoundsPlaying(
     if (original != 0) {
         return original;
     }
-    return HasStatefulSoundInBank(bankSlot) ? 2 : 0;
+    const bool playing = HasStatefulSoundInBank(bankSlot) ||
+                         HasOneShotSound(nullptr, -1, bankSlot);
+    return playing ? 2 : 0;
 }
 
 std::int16_t __fastcall HookAreEventPhysicalSoundsPlaying(

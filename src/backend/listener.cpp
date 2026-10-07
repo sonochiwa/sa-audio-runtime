@@ -119,25 +119,35 @@ void UpdateVoicePositions(std::vector<Voice>& voices) {
         return;
     }
     for (auto& voice : voices) {
-        if (!voice.buffer || !voice.spatialBuffer || !voice.followsCamera) {
+        if (!voice.buffer || !voice.spatialBuffer) {
             continue;
         }
-        const auto relative =
-            TransformWorldPosition(transform, voice.worldPosition);
-        voice.relativePosition = relative;
-        AudioCallSucceeded(voice.spatialBuffer->SetPosition(
-            relative.x,
-            relative.y,
-            relative.z,
-            DS3D_IMMEDIATE
-        ));
-        voice.mixVolumeDb =
-            voice.sourceVolumeDb -
-            voice.headroomDb +
-            GetDirectionalMikeAttenuation(relative) +
-            GetDistanceAttenuation(
-                Magnitude(relative) / voice.rollOffFactor
-            );
+        if (voice.followsCamera) {
+            const auto relative =
+                TransformWorldPosition(transform, voice.worldPosition);
+            voice.relativePosition = relative;
+            AudioCallSucceeded(voice.spatialBuffer->SetPosition(
+                relative.x,
+                relative.y,
+                relative.z,
+                DS3D_IMMEDIATE
+            ));
+            voice.mixVolumeDb =
+                voice.sourceVolumeDb -
+                voice.headroomDb +
+                GetDirectionalMikeAttenuation(relative) +
+                GetDistanceAttenuation(
+                    Magnitude(relative) / voice.rollOffFactor
+                );
+        } else if (voice.vehicleSourceKey != 0) {
+            // A front-end sound stays where it is, but the game still moves
+            // its volume every frame (CAESound::CalculateVolume gives it
+            // m_Volume less the headroom): weather ambience fades in,
+            // explosion tails fade out.
+            voice.mixVolumeDb = voice.sourceVolumeDb - voice.headroomDb;
+        } else {
+            continue;
+        }
         if (voice.vehicleSourceKey != 0 && voice.sampleRate != 0) {
             const auto frequency = static_cast<DWORD>(std::clamp(
                 static_cast<double>(voice.sampleRate) *

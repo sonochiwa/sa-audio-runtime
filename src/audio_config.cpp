@@ -168,3 +168,7 @@ void AudioConfigSetEnabled(bool enabled) {
     gEnabled.store(enabled, std::memory_order_release);
     WriteBoolean("general", "isEnabled", enabled);
 }
+
+void AudioConfigOverrideEnabled(bool enabled) {
+    gEnabled.store(enabled, std::memory_order_release);
+}

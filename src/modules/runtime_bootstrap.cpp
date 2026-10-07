@@ -13,11 +13,40 @@ void ShowBackendState(bool enabled) {
     );
 }
 
+// CAudioEngine::Reset stops every game sound; their owners hear of it through
+// UpdateParameters(-1) and drop their pointers. The runtime's sounds end the
+// same way. Vehicle proxies stay until the next vehicle service, which
+// clears the vehicle's pointer to them, or until the vehicle terminates.
 void ResetRuntimeSources() {
-    gVehicleSoundProxies.clear();
-    gVehicleAudioOwners.clear();
-    gDialogueSoundProxies.clear();
-    gStatefulSoundProxies.clear();
+    for (auto& entry : gVehicleSoundProxies) {
+        entry.second.active = false;
+    }
+    // An owner may ask for a new sound while it hears of the old one ending;
+    // only the sounds that existed at the reset end here.
+    std::vector<void*> dialogueOwners;
+    for (const auto& entry : gDialogueSoundProxies) {
+        dialogueOwners.push_back(entry.first);
+    }
+    for (auto* owner : dialogueOwners) {
+        const auto proxy = gDialogueSoundProxies.find(owner);
+        if (proxy != gDialogueSoundProxies.end()) {
+            const auto identity = GetDialogueProxyIdentity(owner, proxy->second);
+            NotifyDialogueFinished(proxy->second);
+            EraseDialogueProxy(identity);
+        }
+    }
+    std::vector<std::uint32_t> statefulKeys;
+    for (const auto& entry : gStatefulSoundProxies) {
+        statefulKeys.push_back(entry.first);
+    }
+    for (const auto key : statefulKeys) {
+        const auto proxy = gStatefulSoundProxies.find(key);
+        if (proxy != gStatefulSoundProxies.end()) {
+            FinishStatefulSound(proxy->second);
+            gStatefulSoundProxies.erase(key);
+        }
+    }
+    ForgetOneShotSounds();
     EndVehicleCapture();
     WeaponBackendReset();
 }
@@ -45,6 +74,7 @@ void __fastcall HookAudioEngineService(void* self, void*) {
     gOriginalAudioEngineService(self);
     ServiceDialogueProxies();
     ServiceStatefulSounds();
+    ExpireOneShotSounds();
     PublishCameraTransform();
     WeaponBackendUpdateEnvironment(
         reinterpret_cast<CanSeeOutsideFn>(

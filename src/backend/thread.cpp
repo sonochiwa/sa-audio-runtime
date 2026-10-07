@@ -19,11 +19,14 @@ DWORD WINAPI BackendThread(void*) {
 
     IDirectSound8* directSound{};
     IDirectSound3DListener* listener{};
+    // The device needs the game window, which a large ModLoader setup can
+    // delay well past the first seconds; the worker keeps trying, at a lower
+    // rate after the first five seconds, until the game exits.
     for (int attempt = 0;
-         attempt < 100 &&
          !CreateAudioDevice(&directSound, &listener);
          ++attempt) {
-        if (WaitForSingleObject(gStopEvent, 50) == WAIT_OBJECT_0) {
+        const DWORD retryMs = attempt < 100 ? 50 : 500;
+        if (WaitForSingleObject(gStopEvent, retryMs) == WAIT_OBJECT_0) {
             return 2;
         }
     }
@@ -62,6 +65,12 @@ DWORD WINAPI BackendThread(void*) {
     auto resetEpoch = gResetEpoch.load(std::memory_order_acquire);
     auto nextDeviceHealthCheck = GetTickCount64() + 1000;
     while (WaitForMultipleObjects(2, waits, FALSE, 10) != WAIT_OBJECT_0) {
+        PublishDebugSnapshot(
+            voices,
+            vehicleSources.size(),
+            minigunSources.size(),
+            virtualRuntimeSources.size()
+        );
         const auto requestedReset =
             gResetEpoch.load(std::memory_order_acquire);
         if (requestedReset != resetEpoch) {
@@ -232,26 +241,12 @@ DWORD WINAPI BackendThread(void*) {
                 wasPaused = true;
             }
             TakeCoalescedJobs(coalescedJobs);
-            for (const auto& job : coalescedJobs) {
-                if (job.type == AudioJobType::VehicleStop) {
-                    ProcessVehicleJob(vehicleSources, voices, job);
-                } else if (job.type == AudioJobType::DialogueStop ||
-                           job.type == AudioJobType::StatefulStop) {
-                    ProcessDialogueJob(
-                        directSound,
-                        gameDirectory,
-                        activeLookupPath,
-                        vehicleBanks,
-                        voices,
-                        virtualRuntimeSources,
-                        job
-                    );
-                }
-            }
             const auto pausedAt = GetTickCount64();
             for (auto& [key, source] : virtualRuntimeSources) {
                 source.lastUpdateAt = pausedAt;
             }
+            // Starts before stops: a sound the game started and stopped
+            // within one worker pass must end stopped.
             while (read != write) {
                 const auto& job = gJobs[read];
                 if (dialogueReplacementIsEnabled &&
@@ -270,18 +265,44 @@ DWORD WINAPI BackendThread(void*) {
                 read = (read + 1) & kQueueMask;
             }
             gRead.store(write, std::memory_order_release);
+            for (const auto& job : coalescedJobs) {
+                if (job.type == AudioJobType::VehicleStop) {
+                    ProcessVehicleJob(vehicleSources, voices, job);
+                } else if (IsRuntimeStopJob(job.type)) {
+                    ProcessDialogueJob(
+                        directSound,
+                        gameDirectory,
+                        activeLookupPath,
+                        vehicleBanks,
+                        voices,
+                        virtualRuntimeSources,
+                        job
+                    );
+                }
+            }
             continue;
         }
         if (wasPaused) {
             ResumeVoices(voices);
+            // The game's own timers stand still during a pause, so the time
+            // paused does not count against a source's heartbeat.
             const auto resumedAt = GetTickCount64();
             for (auto& [key, source] : virtualRuntimeSources) {
                 source.lastUpdateAt = resumedAt;
+            }
+            for (auto& source : minigunSources) {
+                source.lastHeartbeat = resumedAt;
+            }
+            for (auto& [key, source] : vehicleSources) {
+                source.lastHeartbeat = resumedAt;
             }
             wasPaused = false;
         }
         TakeCoalescedJobs(coalescedJobs);
         for (const auto& job : coalescedJobs) {
+            if (IsRuntimeStopJob(job.type)) {
+                continue;
+            }
             if (job.type == AudioJobType::VehicleUpdate ||
                 job.type == AudioJobType::VehicleStop) {
                 if (vehicleReplacementIsEnabled) {
@@ -367,6 +388,21 @@ DWORD WINAPI BackendThread(void*) {
             read = (read + 1) & kQueueMask;
         }
         gRead.store(read, std::memory_order_release);
+        if (dialogueReplacementIsEnabled) {
+            for (const auto& job : coalescedJobs) {
+                if (IsRuntimeStopJob(job.type)) {
+                    ProcessDialogueJob(
+                        directSound,
+                        gameDirectory,
+                        activeLookupPath,
+                        vehicleBanks,
+                        voices,
+                        virtualRuntimeSources,
+                        job
+                    );
+                }
+            }
+        }
         if (vehicleReplacementIsEnabled) {
             ContinueVehicleLoops(
                 activeLookupPath,

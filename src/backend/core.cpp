@@ -120,6 +120,11 @@ bool AudioCallSucceeded(HRESULT result) {
     return false;
 }
 
+bool IsRuntimeStopJob(AudioJobType type) {
+    return type == AudioJobType::DialogueStop ||
+           type == AudioJobType::StatefulStop;
+}
+
 bool IsCoalescedSourceJob(AudioJobType type) {
     return type == AudioJobType::VehicleUpdate ||
            type == AudioJobType::VehicleStop ||

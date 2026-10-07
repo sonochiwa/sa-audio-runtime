@@ -2,6 +2,25 @@
 
 namespace backend {
 
+namespace {
+
+// CleanupVoices keeps voices that wait to start or that a pause holds; a
+// stopped one of those would otherwise start on the next pass or on resume.
+void StopKeyedVoice(Voice& voice) {
+    voice.buffer->Stop();
+    voice.pendingStart = false;
+    voice.suspended = false;
+}
+
+// Generation 0 stops whatever plays under the key (a cancelled one-shot);
+// any other stops only that generation, so the stop of a sound that has been
+// replaced leaves its successor alone.
+bool IsStopTarget(std::uint32_t voiceGeneration, const AudioJob& job) {
+    return job.sourceGeneration == 0 || voiceGeneration == job.sourceGeneration;
+}
+
+} // namespace
+
 void ProcessDialogueJob(
     IDirectSound8* directSound,
     const std::string& gameDirectory,
@@ -14,9 +33,14 @@ void ProcessDialogueJob(
     auto* voice = FindVehicleVoice(voices, job.sourceKey);
     if (job.type == AudioJobType::DialogueStop ||
         job.type == AudioJobType::StatefulStop) {
-        virtualSources.erase(job.sourceKey);
-        if (voice && voice->buffer) {
-            voice->buffer->Stop();
+        const auto virtualSource = virtualSources.find(job.sourceKey);
+        if (virtualSource != virtualSources.end() &&
+            IsStopTarget(virtualSource->second.job.sourceGeneration, job)) {
+            virtualSources.erase(virtualSource);
+        }
+        if (voice && voice->buffer && IsStopTarget(voice->vehicleGeneration, job)) {
+            StopKeyedVoice(*voice);
+            CleanupVoices(voices);
         }
         return;
     }
@@ -69,7 +93,7 @@ void ProcessDialogueJob(
 
     virtualSources.erase(job.sourceKey);
     if (voice && voice->buffer) {
-        voice->buffer->Stop();
+        StopKeyedVoice(*voice);
         CleanupVoices(voices);
     }
     auto* bank = GetDialogueBank(
@@ -80,6 +104,12 @@ void ProcessDialogueJob(
     );
     const auto* sample = bank ? bank->samples.Get(job.drySoundId) : nullptr;
     if (!bank || !sample) {
+        gStartFailures.fetch_add(1, std::memory_order_relaxed);
+        gLastFailedStart.store(
+            (static_cast<std::int32_t>(job.bankId) << 16) |
+                static_cast<std::uint16_t>(job.drySoundId),
+            std::memory_order_relaxed
+        );
         if (job.type == AudioJobType::DialogueStart ||
             job.type == AudioJobType::StatefulStart) {
             PublishCompletion(job);

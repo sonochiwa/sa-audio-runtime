@@ -18,6 +18,7 @@ std::string gLookupPath;
 bool gArchiveInstalled{};
 bool gLookupInstalled{};
 HMODULE gDeliveredBackend{};
+SRWLOCK gStateLock = SRWLOCK_INIT;
 
 std::map<std::uint32_t, std::string> gDynamicPaths;
 std::array<std::string, std::size(kPacks)> gPackPaths{};

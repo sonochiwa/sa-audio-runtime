@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 struct AudioVector {
     float x{};
@@ -123,3 +124,38 @@ void WeaponBackendUpdateCameraTransform(
     const AudioCameraTransform& transform
 );
 void WeaponBackendUpdateEnvironment(bool canSeeOutside);
+
+// Debug autotest view of the worker, published once per worker pass while
+// snapshots are enabled.
+struct BackendDebugVoice {
+    std::uintptr_t sourceKey{};
+    std::int16_t soundId{-1};
+    std::int16_t bankId{-1};
+    float mixVolumeDb{};
+    float playbackSpeed{};
+    float dopplerScale{};
+    float sourceVolumeDb{};
+    AudioVector worldPosition{};
+    std::uint32_t generation{};
+    bool looping{};
+    bool pending{};
+    bool suspended{};
+    bool frontEnd{};
+    bool stopFading{};
+};
+
+struct BackendDebugSnapshot {
+    std::uint32_t pass{};
+    std::uint32_t vehicleSources{};
+    std::uint32_t minigunSources{};
+    std::uint32_t virtualSources{};
+    std::uint32_t vehicleSourceTimeouts{};
+    std::uint32_t minigunStops{};
+    std::uint32_t startFailures{};
+    std::int16_t lastFailedBank{-1};
+    std::int16_t lastFailedSound{-1};
+    std::vector<BackendDebugVoice> voices;
+};
+
+void WeaponBackendEnableDebugSnapshots();
+bool WeaponBackendReadDebugSnapshot(BackendDebugSnapshot& snapshot);

@@ -18,6 +18,7 @@ void UpdateVehicleSources(
             ++source;
             continue;
         }
+        gVehicleSourceTimeouts.fetch_add(1, std::memory_order_relaxed);
         StopVehicleVoice(voices, source->first);
         source = sources.erase(source);
     }

@@ -9,6 +9,7 @@ void __fastcall HookCancelEventSounds(
     void* owner
 ) {
     CancelStatefulSounds(owner, eventId, nullptr, -1, true);
+    CancelOneShotSounds(owner, eventId, -1);
     gOriginalCancelEventSounds(self, eventId, owner);
 }
 
@@ -41,6 +42,7 @@ void __fastcall HookCancelBankSlotSounds(
     bool fullStop
 ) {
     CancelStatefulSounds(nullptr, -1, nullptr, bankSlot, fullStop);
+    CancelOneShotSounds(nullptr, -1, bankSlot);
     gOriginalCancelBankSlotSounds(self, bankSlot, fullStop);
 }
 
@@ -51,6 +53,7 @@ void __fastcall HookCancelOwnedSounds(
     bool fullStop
 ) {
     CancelStatefulSounds(owner, -1, nullptr, -1, fullStop);
+    CancelOneShotSounds(owner, -1, -1);
     gOriginalCancelOwnedSounds(self, owner, fullStop);
 }
 
@@ -59,6 +62,14 @@ void* __fastcall HookRequestNewSound(
     void*,
     void* sound
 ) {
+    auto* result = RouteNewSound(self, sound);
+    if (gRequestObserver && sound) {
+        gRequestObserver(sound, result);
+    }
+    return result;
+}
+
+void* RouteNewSound(void* self, void* sound) {
     VehicleCapture capture = gVehicleCapture;
     if (!sound) {
         return gOriginalRequestNewSound(self, sound);
@@ -214,6 +225,7 @@ void* __fastcall HookRequestNewSound(
             );
             job.effectsGainDb = ReadEffectsGainDb();
             if (job.bankId >= 0 && VehicleBackendEnqueue(job)) {
+                TrackOneShotSound(bytes, job.sourceKey, job.baseSpeed);
                 return nullptr;
             }
         }
@@ -353,6 +365,7 @@ void* __fastcall HookRequestNewSound(
                     AudioJobType::GenericOneShot
                 );
                 if (DialogueBackendEnqueue(job)) {
+                    TrackOneShotSound(bytes, job.sourceKey, job.baseSpeed);
                     return nullptr;
                 }
             }

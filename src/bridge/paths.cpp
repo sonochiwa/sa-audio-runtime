@@ -116,10 +116,10 @@ DynamicSoundReference GetDynamicSoundReference(
             sound >= 1 &&
             sound <= static_cast<int>(kMaxSounds)) {
             const auto globalBank = pack.firstBank + localBank - 1;
-            const auto nextFirstBank = packIndex + 1 < std::size(kPacks)
-                ? kPacks[packIndex + 1].firstBank
-                : 700;
-            if (globalBank < nextFirstBank) {
+            // The last pack has no successor; BankLkup.dat decides how many
+            // banks it holds (SPC_PA ends at 709 in the stock file).
+            const bool lastPack = packIndex + 1 == std::size(kPacks);
+            if (lastPack || globalBank < kPacks[packIndex + 1].firstBank) {
                 return {globalBank, sound - 1};
             }
             return {};

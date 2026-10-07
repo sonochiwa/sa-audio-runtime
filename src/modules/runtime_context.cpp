@@ -26,6 +26,7 @@ CancelOwnedSoundsFn gOriginalCancelOwnedSounds{};
 AudioEntityTerminateFn gOriginalPedSpeechTerminate{};
 AudioEntityTerminateFn gOriginalPedlessSpeechTerminate{};
 AudioEntityDestructorFn gOriginalPoliceScannerDestructor{};
+RequestObserverFn gRequestObserver{};
 
 std::map<std::uint64_t, VehicleSoundProxy> gVehicleSoundProxies;
 std::set<void*> gVehicleAudioOwners;

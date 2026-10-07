@@ -57,7 +57,7 @@ void ReconcilePersistentVehicleSounds(
         bytes[kVehicleFastSirenStateOffset] = 0;
     }
     if (releasedSkid) {
-        *reinterpret_cast<std::int32_t*>(
+        *reinterpret_cast<std::int16_t*>(
             bytes + kVehicleSurfaceSoundTypeOffset
         ) = -1;
         *reinterpret_cast<std::int16_t*>(

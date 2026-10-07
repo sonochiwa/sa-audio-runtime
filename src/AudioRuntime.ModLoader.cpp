@@ -41,33 +41,12 @@ extern "C" __declspec(dllexport) void GetPluginData(
 
 extern "C" __declspec(dllexport) void
 AudioRuntimeReplayModLoaderSamples() {
+    // Called from the runtime's start-up thread while ModLoader may still be
+    // installing files on the game thread.
+    AcquireSRWLockExclusive(&gStateLock);
     gDeliveredBackend = FindBackendModule();
-    DeliverSources();
-    for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
-        for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
-            if (gInstalled[bank][sound]) {
-                Deliver({
-                    static_cast<int>(bank),
-                    static_cast<int>(sound)
-                });
-            }
-        }
-    }
-    for (const auto& [key, path] : gDynamicPaths) {
-        DeliverDynamic(
-            {
-                static_cast<int>(key >> 16),
-                static_cast<int>(key & 0xFFFFu)
-            },
-            path,
-            true
-        );
-    }
-    for (int pack = 0; pack < static_cast<int>(gPackPaths.size()); ++pack) {
-        if (gPackInstalled[static_cast<std::size_t>(pack)]) {
-            DeliverPack(pack);
-        }
-    }
+    DeliverAll();
+    ReleaseSRWLockExclusive(&gStateLock);
 }
 
 BOOL APIENTRY DllMain(HMODULE, DWORD, void*) {

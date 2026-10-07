@@ -153,29 +153,46 @@ int __cdecl InstallFile(
     modloader_plugin_t*,
     const modloader_file_t* file
 ) {
-    return StoreFile(file, true);
+    AcquireSRWLockExclusive(&gStateLock);
+    const auto result = StoreFile(file, true);
+    ReleaseSRWLockExclusive(&gStateLock);
+    return result;
 }
 
+// The file changed in place and keeps its path, which the runtime would
+// take for no change; removing it first makes the runtime read it again.
 int __cdecl ReinstallFile(
     modloader_plugin_t*,
     const modloader_file_t* file
 ) {
-    return StoreFile(file, true);
+    AcquireSRWLockExclusive(&gStateLock);
+    StoreFile(file, false);
+    const auto result = StoreFile(file, true);
+    ReleaseSRWLockExclusive(&gStateLock);
+    return result;
 }
 
 int __cdecl UninstallFile(
     modloader_plugin_t*,
     const modloader_file_t* file
 ) {
-    return StoreFile(file, false);
+    AcquireSRWLockExclusive(&gStateLock);
+    const auto result = StoreFile(file, false);
+    ReleaseSRWLockExclusive(&gStateLock);
+    return result;
 }
 
 void __cdecl Update(modloader_plugin_t*) {
+    AcquireSRWLockExclusive(&gStateLock);
     const auto backend = FindBackendModule();
-    if (!backend || backend == gDeliveredBackend) {
-        return;
+    if (backend && backend != gDeliveredBackend) {
+        gDeliveredBackend = backend;
+        DeliverAll();
     }
-    gDeliveredBackend = backend;
+    ReleaseSRWLockExclusive(&gStateLock);
+}
+
+void DeliverAll() {
     DeliverSources();
     for (std::size_t bank = 0; bank < kRuntimeBankCount; ++bank) {
         for (std::size_t sound = 0; sound < kMaxSounds; ++sound) {
