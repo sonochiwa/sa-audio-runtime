@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.4.1
+
+- Fixed a crash after starting a new game or loading a save from the menu.
+- Fixed sounds the game plays once at a time repeating, such as a ped being
+  run over and the missile lock tone.
+- Fixed weather ambience and explosion tails ignoring their volume changes.
+- Fixed the minigun stop sound after a pause and stopped sounds playing on.
+- Fixed a rare hang at start-up together with Borderless Mode.
+- Fixed ModLoader SPC_PA banks 700-709, edited files, WAV replacements lost
+  on reload, extensible WAV files and damaged file sizes.
+
 ## 2.4.0
 
 - Changed the toggle to a word typed in game, `AUDIORUNTIME` by default;
