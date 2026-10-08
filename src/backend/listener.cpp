@@ -126,12 +126,7 @@ void UpdateVoicePositions(std::vector<Voice>& voices) {
             const auto relative =
                 TransformWorldPosition(transform, voice.worldPosition);
             voice.relativePosition = relative;
-            AudioCallSucceeded(voice.spatialBuffer->SetPosition(
-                relative.x,
-                relative.y,
-                relative.z,
-                DS3D_IMMEDIATE
-            ));
+            SetVoicePosition(voice, relative);
             voice.mixVolumeDb =
                 voice.sourceVolumeDb -
                 voice.headroomDb +
@@ -158,7 +153,7 @@ void UpdateVoicePositions(std::vector<Voice>& voices) {
                 static_cast<double>(DSBFREQUENCY_MIN),
                 static_cast<double>(DSBFREQUENCY_MAX)
             ));
-            AudioCallSucceeded(voice.buffer->SetFrequency(frequency));
+            SetVoiceFrequency(voice, frequency);
         }
     }
 }

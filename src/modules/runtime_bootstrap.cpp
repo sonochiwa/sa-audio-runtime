@@ -71,7 +71,9 @@ void ServiceToggleCommand() {
 }
 
 void __fastcall HookAudioEngineService(void* self, void*) {
+    WeaponBackendBeginGameAudio();
     gOriginalAudioEngineService(self);
+    WeaponBackendEndGameAudio();
     ServiceDialogueProxies();
     ServiceStatefulSounds();
     ExpireOneShotSounds();

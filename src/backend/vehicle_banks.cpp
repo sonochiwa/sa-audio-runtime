@@ -127,11 +127,7 @@ void RestartVehicleLoop(
     const AudioJob& job,
     float listenerVolume
 ) {
-    LONG currentVolume{};
-    const auto currentVolumeDb =
-        voice.buffer && SUCCEEDED(voice.buffer->GetVolume(&currentVolume))
-            ? static_cast<float>(currentVolume) / 100.0f
-            : -100.0f;
+    const auto currentVolumeDb = GetVoiceVolumeDb(voice, -100.0f);
     voice.vehicleStopFading = false;
     voice.vehicleLoopPending = false;
     voice.vehicleGeneration = job.sourceGeneration;

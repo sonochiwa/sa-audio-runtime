@@ -2,12 +2,84 @@
 
 namespace backend {
 
+namespace {
+
+bool IsVoicePlaying(Voice& voice) {
+    WaitForGameAudio();
+    DWORD status{};
+    return SUCCEEDED(voice.buffer->GetStatus(&status)) &&
+           (status & DSBSTATUS_PLAYING) != 0;
+}
+
+} // namespace
+
+bool SetVoiceVolume(Voice& voice, LONG volume) {
+    if (voice.appliedVolume == volume) {
+        return true;
+    }
+    WaitForGameAudio();
+    if (!AudioCallSucceeded(voice.buffer->SetVolume(volume))) {
+        voice.appliedVolume = kUnknownVolume;
+        return false;
+    }
+    voice.appliedVolume = volume;
+    return true;
+}
+
+bool SetVoiceFrequency(Voice& voice, DWORD frequency) {
+    if (voice.appliedFrequency == frequency) {
+        return true;
+    }
+    WaitForGameAudio();
+    if (!AudioCallSucceeded(voice.buffer->SetFrequency(frequency))) {
+        voice.appliedFrequency = 0;
+        return false;
+    }
+    voice.appliedFrequency = frequency;
+    return true;
+}
+
+bool SetVoicePosition(Voice& voice, const AudioVector& position) {
+    if (voice.positionApplied &&
+        voice.appliedPosition.x == position.x &&
+        voice.appliedPosition.y == position.y &&
+        voice.appliedPosition.z == position.z) {
+        return true;
+    }
+    WaitForGameAudio();
+    if (!AudioCallSucceeded(voice.spatialBuffer->SetPosition(
+            position.x,
+            position.y,
+            position.z,
+            DS3D_IMMEDIATE
+        ))) {
+        voice.positionApplied = false;
+        return false;
+    }
+    voice.appliedPosition = position;
+    voice.positionApplied = true;
+    return true;
+}
+
+float GetVoiceVolumeDb(Voice& voice, float fallbackDb) {
+    if (voice.appliedVolume == kUnknownVolume) {
+        LONG volume{};
+        WaitForGameAudio();
+        if (!voice.buffer || FAILED(voice.buffer->GetVolume(&volume))) {
+            return fallbackDb;
+        }
+        voice.appliedVolume = volume;
+    }
+    return static_cast<float>(voice.appliedVolume) / 100.0f;
+}
+
 void StartPendingVoices(std::vector<Voice>& voices) {
     for (auto& voice : voices) {
         if (!voice.pendingStart || !voice.buffer) {
             continue;
         }
         voice.pendingStart = false;
+        WaitForGameAudio();
         if (FAILED(voice.buffer->Play(
                 0,
                 0,
@@ -156,17 +228,9 @@ float RebalanceVoiceMixer(std::vector<Voice>& voices) {
             voice.volumeFadeActive = false;
         }
 
-        LONG currentVolume{};
-        DWORD status{};
-        const bool isPlaying =
-            SUCCEEDED(voice.buffer->GetStatus(&status)) &&
-            (status & DSBSTATUS_PLAYING) != 0;
-        const auto currentVolumeDb =
-            SUCCEEDED(voice.buffer->GetVolume(&currentVolume))
-                ? static_cast<float>(currentVolume) / 100.0f
-                : targetVolume;
-        if (isPlaying &&
-            std::abs(targetVolume - currentVolumeDb) > 60.0f) {
+        const auto currentVolumeDb = GetVoiceVolumeDb(voice, targetVolume);
+        if (std::abs(targetVolume - currentVolumeDb) > 60.0f &&
+            IsVoicePlaying(voice)) {
             voice.volumeFadeActive = true;
             voice.volumeFadeStartedAt = GetTickCount64();
             voice.volumeFadeDurationMs =
@@ -175,9 +239,7 @@ float RebalanceVoiceMixer(std::vector<Voice>& voices) {
             voice.volumeFadeTargetDb = targetVolume;
             continue;
         }
-        AudioCallSucceeded(voice.buffer->SetVolume(
-            static_cast<LONG>(targetVolume * 100.0f)
-        ));
+        SetVoiceVolume(voice, static_cast<LONG>(targetVolume * 100.0f));
     }
     return compressionGainDb;
 }
@@ -192,11 +254,10 @@ void UpdateVoiceVolumeFades(std::vector<Voice>& voices) {
         }
         const auto elapsed = now - voice.volumeFadeStartedAt;
         if (elapsed >= voice.volumeFadeDurationMs) {
-            AudioCallSucceeded(voice.buffer->SetVolume(
-                static_cast<LONG>(
-                    voice.volumeFadeTargetDb * 100.0f
-                )
-            ));
+            SetVoiceVolume(
+                voice,
+                static_cast<LONG>(voice.volumeFadeTargetDb * 100.0f)
+            );
             voice.volumeFadeActive = false;
             continue;
         }
@@ -219,9 +280,7 @@ void UpdateVoiceVolumeFades(std::vector<Voice>& voices) {
             -100.0f,
             0.0f
         );
-        AudioCallSucceeded(voice.buffer->SetVolume(
-            static_cast<LONG>(volume * 100.0f)
-        ));
+        SetVoiceVolume(voice, static_cast<LONG>(volume * 100.0f));
     }
 }
 

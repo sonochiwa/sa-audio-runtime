@@ -15,6 +15,7 @@ void ContinueVehicleLoops(
             !voice.buffer) {
             continue;
         }
+        WaitForGameAudio();
         DWORD status{};
         if (FAILED(voice.buffer->GetStatus(&status))) {
             RequestDeviceRecovery();

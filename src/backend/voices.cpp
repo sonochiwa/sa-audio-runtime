@@ -11,6 +11,7 @@ void CleanupVoices(std::vector<Voice>& voices) {
                 if (voice.pendingStart || voice.suspended) {
                     return false;
                 }
+                WaitForGameAudio();
                 DWORD status{};
                 if (voice.buffer &&
                     (FAILED(voice.buffer->GetStatus(&status)) ||
@@ -124,6 +125,7 @@ bool ReserveVoiceSlot(
     }
 
     PublishCompletion(*candidate);
+    WaitForGameAudio();
     if (candidate->buffer) {
         candidate->buffer->Stop();
     }
@@ -180,6 +182,7 @@ void PlaySample(
         return;
     }
 
+    WaitForGameAudio();
     IDirectSoundBuffer* voice{};
     if (looping && sample->loopStartSample >= 0) {
         OriginalPcmSample loopSample = *sample;
@@ -227,18 +230,16 @@ void PlaySample(
         static_cast<double>(DSBFREQUENCY_MIN),
         static_cast<double>(DSBFREQUENCY_MAX)
     ));
-    const auto volume = static_cast<LONG>(
-        std::clamp(volumeDb, -100.0f, 0.0f) * 100.0f
+    const auto volume = std::clamp<LONG>(
+        static_cast<LONG>(std::clamp(volumeDb, -100.0f, 0.0f) * 100.0f),
+        DSBVOLUME_MIN,
+        DSBVOLUME_MAX
     );
 
     const bool configured =
         AudioCallSucceeded(voice->SetCurrentPosition(0)) &&
         AudioCallSucceeded(voice->SetFrequency(frequency)) &&
-        AudioCallSucceeded(voice->SetVolume(std::clamp<LONG>(
-            volume,
-            DSBVOLUME_MIN,
-            DSBVOLUME_MAX
-        ))) &&
+        AudioCallSucceeded(voice->SetVolume(volume)) &&
         AudioCallSucceeded(spatialBuffer->SetMode(
             forcedFront ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
             DS3D_IMMEDIATE
@@ -283,6 +284,10 @@ void PlaySample(
     newVoice.minigunSourceKey = minigunSourceKey;
     newVoice.looping = looping;
     newVoice.isBulletHit = isBulletHit;
+    newVoice.appliedVolume = volume;
+    newVoice.appliedFrequency = frequency;
+    newVoice.appliedPosition = position;
+    newVoice.positionApplied = true;
     voices.push_back(newVoice);
 }
 

@@ -124,6 +124,10 @@ void WeaponBackendUpdateCameraTransform(
     const AudioCameraTransform& transform
 );
 void WeaponBackendUpdateEnvironment(bool canSeeOutside);
+// Bracket the game's own audio service; the worker makes no DirectSound
+// calls in between.
+void WeaponBackendBeginGameAudio();
+void WeaponBackendEndGameAudio();
 
 // Debug autotest view of the worker, published once per worker pass while
 // snapshots are enabled.

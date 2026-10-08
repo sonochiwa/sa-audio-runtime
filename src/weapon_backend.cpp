@@ -11,6 +11,8 @@ bool WeaponBackendStart(void* module) {
     gWrite.store(0, std::memory_order_release);
     gRead.store(0, std::memory_order_release);
     gResetEpoch.store(0, std::memory_order_release);
+    gWakePending.store(false, std::memory_order_release);
+    gGameAudioActive.store(false, std::memory_order_release);
     ClearCoalescedJobs();
     AcquireSRWLockExclusive(&gCoalescedJobLock);
     gCoalescedJobs.reserve(1024);
@@ -51,9 +53,7 @@ void WeaponBackendStop() {
 
 void WeaponBackendReset() {
     gResetEpoch.fetch_add(1, std::memory_order_acq_rel);
-    if (gWakeEvent) {
-        SetEvent(gWakeEvent);
-    }
+    WakeBackend();
 }
 
 bool WeaponBackendEnqueue(const AudioJob& job) {
@@ -97,7 +97,7 @@ bool WeaponBackendEnqueue(const AudioJob& job) {
             return false;
         }
         ReleaseSRWLockExclusive(&gCoalescedJobLock);
-        SetEvent(gWakeEvent);
+        WakeBackend();
         return true;
     }
     const auto write = gWrite.load(std::memory_order_relaxed);
@@ -107,7 +107,7 @@ bool WeaponBackendEnqueue(const AudioJob& job) {
     }
     gJobs[write] = job;
     gWrite.store(next, std::memory_order_release);
-    SetEvent(gWakeEvent);
+    WakeBackend();
     return true;
 }
 
@@ -118,9 +118,7 @@ bool WeaponBackendShouldReplaceOriginal() {
 
 void WeaponBackendSetEnabled(bool enabled) {
     gReplaceOriginal.store(enabled, std::memory_order_release);
-    if (gWakeEvent) {
-        SetEvent(gWakeEvent);
-    }
+    WakeBackend();
 }
 
 bool WeaponBackendIsEnabled() {
@@ -134,9 +132,7 @@ bool VehicleBackendShouldReplaceOriginal() {
 
 void VehicleBackendSetEnabled(bool enabled) {
     gReplaceVehicles.store(enabled, std::memory_order_release);
-    if (gWakeEvent) {
-        SetEvent(gWakeEvent);
-    }
+    WakeBackend();
 }
 
 bool VehicleBackendEnqueue(const AudioJob& job) {
@@ -150,9 +146,7 @@ bool DialogueBackendShouldReplaceOriginal() {
 
 void DialogueBackendSetEnabled(bool enabled) {
     gReplaceDialogues.store(enabled, std::memory_order_release);
-    if (gWakeEvent) {
-        SetEvent(gWakeEvent);
-    }
+    WakeBackend();
 }
 
 bool DialogueBackendEnqueue(const AudioJob& job) {
@@ -193,8 +187,8 @@ bool WeaponBackendSetSampleOverride(
         changed = true;
     }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (changed && gWakeEvent) {
-        SetEvent(gWakeEvent);
+    if (changed) {
+        WakeBackend();
     }
     return true;
 }
@@ -219,8 +213,8 @@ bool WeaponBackendClearSampleOverride(
         changed = true;
     }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (changed && gWakeEvent) {
-        SetEvent(gWakeEvent);
+    if (changed) {
+        WakeBackend();
     }
     return true;
 }
@@ -252,8 +246,8 @@ bool WeaponBackendSetDynamicSampleOverride(
         gDynamicBanksDirty = true;
     }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (changed && gWakeEvent) {
-        SetEvent(gWakeEvent);
+    if (changed) {
+        WakeBackend();
     }
     return true;
 }
@@ -278,8 +272,8 @@ bool WeaponBackendSetPackOverride(
         changed = true;
     }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (changed && gWakeEvent) {
-        SetEvent(gWakeEvent);
+    if (changed) {
+        WakeBackend();
     }
     return true;
 }
@@ -300,8 +294,8 @@ void WeaponBackendSetArchiveOverride(
         changed = true;
     }
     ReleaseSRWLockExclusive(&gOverrideLock);
-    if (changed && gWakeEvent) {
-        SetEvent(gWakeEvent);
+    if (changed) {
+        WakeBackend();
     }
 }
 
@@ -324,4 +318,12 @@ void WeaponBackendUpdateCameraTransform(
 void WeaponBackendUpdateEnvironment(bool canSeeOutside) {
     gCanSeeOutside.store(canSeeOutside, std::memory_order_release);
     gEnvironmentFrame.fetch_add(1, std::memory_order_release);
+}
+
+void WeaponBackendBeginGameAudio() {
+    gGameAudioActive.store(true, std::memory_order_release);
+}
+
+void WeaponBackendEndGameAudio() {
+    gGameAudioActive.store(false, std::memory_order_release);
 }

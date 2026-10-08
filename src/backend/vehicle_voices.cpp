@@ -14,6 +14,7 @@ void StopVehicleVoice(
             continue;
         }
         voice->vehicleLoopPending = false;
+        WaitForGameAudio();
         DWORD status{};
         const bool canFade =
             voice->buffer &&
@@ -23,11 +24,10 @@ void StopVehicleVoice(
             (status & DSBSTATUS_PLAYING);
         if (canFade) {
             voice->volumeFadeActive = false;
-            LONG currentVolume{};
-            if (SUCCEEDED(voice->buffer->GetVolume(&currentVolume))) {
-                voice->vehicleStopFadeStartDb =
-                    static_cast<float>(currentVolume) / 100.0f;
-            }
+            voice->vehicleStopFadeStartDb = GetVoiceVolumeDb(
+                *voice,
+                voice->vehicleStopFadeStartDb
+            );
             voice->vehicleStopFading = true;
             voice->vehicleStopFadeStartedAt = now;
             ++voice;
@@ -74,10 +74,11 @@ void UpdateVehicleStopFades(std::vector<Voice>& voices) {
                     0.0f
                 ) * 100.0f
             );
-            AudioCallSucceeded(voice->buffer->SetVolume(volume));
+            SetVoiceVolume(*voice, volume);
             ++voice;
             continue;
         }
+        WaitForGameAudio();
         if (voice->buffer) {
             voice->buffer->Stop();
         }
@@ -132,6 +133,7 @@ bool CreateVehicleVoice(
         )) {
         return false;
     }
+    WaitForGameAudio();
     IDirectSoundBuffer* buffer{};
     DWORD initialPosition{};
     DWORD preloopRewriteOffset{};
@@ -175,11 +177,11 @@ bool CreateVehicleVoice(
         static_cast<double>(DSBFREQUENCY_MIN),
         static_cast<double>(DSBFREQUENCY_MAX)
     ));
-    const auto initialVolume = hasLoop ? -100.0f : listenerVolume;
+    const auto initialVolume = static_cast<LONG>(
+        std::clamp(hasLoop ? -100.0f : listenerVolume, -100.0f, 0.0f) * 100.0f
+    );
     if (!AudioCallSucceeded(buffer->SetFrequency(frequency)) ||
-        !AudioCallSucceeded(buffer->SetVolume(static_cast<LONG>(
-            std::clamp(initialVolume, -100.0f, 0.0f) * 100.0f
-        )))) {
+        !AudioCallSucceeded(buffer->SetVolume(initialVolume))) {
         spatialBuffer->Release();
         buffer->Release();
         return false;
@@ -227,6 +229,13 @@ bool CreateVehicleVoice(
         buffer->Release();
         return false;
     }
+    const AudioVector spatialPosition{
+        job.relativePosition.x,
+        job.isFrontEnd && job.relativePosition.y == 0.0f
+            ? 1.0f
+            : job.relativePosition.y,
+        job.relativePosition.z
+    };
     if (!AudioCallSucceeded(spatialBuffer->SetMode(
             job.isFrontEnd ? DS3DMODE_HEADRELATIVE : DS3DMODE_NORMAL,
             DS3D_IMMEDIATE
@@ -240,11 +249,9 @@ bool CreateVehicleVoice(
             DS3D_IMMEDIATE
         )) ||
         !AudioCallSucceeded(spatialBuffer->SetPosition(
-            job.relativePosition.x,
-            job.isFrontEnd && job.relativePosition.y == 0.0f
-                ? 1.0f
-                : job.relativePosition.y,
-            job.relativePosition.z,
+            spatialPosition.x,
+            spatialPosition.y,
+            spatialPosition.z,
             DS3D_IMMEDIATE
         ))) {
         spatialBuffer->Release();
@@ -297,6 +304,10 @@ bool CreateVehicleVoice(
     voice.reportsCompletion =
         job.type == AudioJobType::DialogueStart ||
         job.type == AudioJobType::StatefulStart;
+    voice.appliedVolume = initialVolume;
+    voice.appliedFrequency = frequency;
+    voice.appliedPosition = spatialPosition;
+    voice.positionApplied = true;
     voices.push_back(voice);
     return true;
 }

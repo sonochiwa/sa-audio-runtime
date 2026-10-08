@@ -9,6 +9,7 @@ constexpr std::uint32_t kQueueMask = kQueueCapacity - 1;
 constexpr std::size_t kMaxOriginalSounds = 400;
 constexpr std::size_t kWeaponBankId = 143;
 constexpr std::size_t kBulletHitBankId = 27;
+constexpr LONG kUnknownVolume = DSBVOLUME_MIN - 1;
 
 struct Voice {
     IDirectSoundBuffer* buffer{};
@@ -55,6 +56,13 @@ struct Voice {
     bool isRuntimeEffect{};
     bool isStatefulEffect{};
     bool reportsCompletion{};
+    // What the buffer was last set to. Only the worker sets these, so a call
+    // with the same value would change nothing; it is skipped, since every
+    // DirectSound call holds the lock the game thread's own calls wait for.
+    LONG appliedVolume{kUnknownVolume};
+    DWORD appliedFrequency{};
+    AudioVector appliedPosition{};
+    bool positionApplied{};
 };
 
 struct MinigunSource {
@@ -100,6 +108,8 @@ void ReleaseVehicleBanks( std::unordered_map<std::int16_t, std::unique_ptr<Vehic
 extern HMODULE gModule;
 extern HANDLE gThread;
 extern HANDLE gWakeEvent;
+extern std::atomic<bool> gWakePending;
+extern std::atomic<bool> gGameAudioActive;
 extern HANDLE gStopEvent;
 extern std::array<AudioJob, kQueueCapacity> gJobs;
 extern std::atomic<std::uint32_t> gWrite;
@@ -126,6 +136,8 @@ extern std::string gArchiveOverridePath;
 extern std::string gLookupOverridePath;
 extern bool gBankSourcesDirty;
 extern bool gDynamicBanksDirty;
+void WakeBackend();
+void WaitForGameAudio();
 void RequestDeviceRecovery();
 bool AudioCallSucceeded(HRESULT result);
 bool IsRuntimeStopJob(AudioJobType type);
@@ -154,6 +166,10 @@ float GetVoicePriority(const Voice& voice);
 std::size_t GetVoiceGroupLimit(VoiceGroup group);
 bool ReserveVoiceSlot( std::vector<Voice>& voices, VoiceGroup incomingGroup, float incomingPriority );
 void PlaySample( IDirectSound8* directSound, OriginalSoundBank& bank, std::array<IDirectSoundBuffer*, kMaxOriginalSounds>& baseBuffers, std::vector<Voice>& voices, std::int16_t soundId, float speed, const AudioVector& position, float volumeDb, bool forcedFront, float outputGainDb, const AudioVector& worldPosition, float sourceVolumeDb, float rollOffFactor, bool isTail, std::uintptr_t minigunSourceKey = 0, bool looping = false, bool isBulletHit = false );
+bool SetVoiceVolume(Voice& voice, LONG volume);
+bool SetVoiceFrequency(Voice& voice, DWORD frequency);
+bool SetVoicePosition(Voice& voice, const AudioVector& position);
+float GetVoiceVolumeDb(Voice& voice, float fallbackDb);
 void StartPendingVoices(std::vector<Voice>& voices);
 void SuspendVoices(std::vector<Voice>& voices);
 void ResumeVoices(std::vector<Voice>& voices);

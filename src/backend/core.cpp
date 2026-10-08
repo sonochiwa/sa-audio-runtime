@@ -77,6 +77,8 @@ void ReleaseVehicleBanks(
 HMODULE gModule{};
 HANDLE gThread{};
 HANDLE gWakeEvent{};
+std::atomic<bool> gWakePending{};
+std::atomic<bool> gGameAudioActive{};
 HANDLE gStopEvent{};
 std::array<AudioJob, kQueueCapacity> gJobs{};
 std::atomic<std::uint32_t> gWrite{};
@@ -107,6 +109,34 @@ std::string gArchiveOverridePath;
 std::string gLookupOverridePath;
 bool gBankSourcesDirty{};
 bool gDynamicBanksDirty{};
+
+// The worker drains everything queued when it wakes, so one signal per pass
+// is enough. Further signals before it wakes are skipped: each is a system
+// call on the game thread, which queues hundreds of updates a frame.
+void WakeBackend() {
+    if (gWakeEvent &&
+        !gWakePending.exchange(true, std::memory_order_acq_rel)) {
+        SetEvent(gWakeEvent);
+    }
+}
+
+// DirectSound runs every call in the process under one lock, and the game
+// thread makes most of its calls in one burst a frame, in its audio service.
+// A worker call made meanwhile delays one of the game's; a voice start or
+// release delays it by much more. The worker waits for the burst to end,
+// which takes a fraction of a millisecond; the limit only guards against a
+// service that never reports its end.
+void WaitForGameAudio() {
+    constexpr auto kMaximumWait = std::chrono::milliseconds(4);
+    if (!gGameAudioActive.load(std::memory_order_acquire)) {
+        return;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + kMaximumWait;
+    while (gGameAudioActive.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        SwitchToThread();
+    }
+}
 
 void RequestDeviceRecovery() {
     gDeviceRecoveryRequested.store(true, std::memory_order_release);

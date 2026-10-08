@@ -17,6 +17,7 @@ void VirtualizeRuntimeVoices(
             continue;
         }
 
+        WaitForGameAudio();
         DSBCAPS capabilities{};
         capabilities.dwSize = sizeof(capabilities);
         DWORD playCursor{};

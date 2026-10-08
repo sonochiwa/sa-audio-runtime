@@ -65,6 +65,9 @@ DWORD WINAPI BackendThread(void*) {
     auto resetEpoch = gResetEpoch.load(std::memory_order_acquire);
     auto nextDeviceHealthCheck = GetTickCount64() + 1000;
     while (WaitForMultipleObjects(2, waits, FALSE, 10) != WAIT_OBJECT_0) {
+        // Cleared before the queues are read: a job queued after this point
+        // signals again, one queued before it is seen by this pass.
+        gWakePending.exchange(false, std::memory_order_acq_rel);
         PublishDebugSnapshot(
             voices,
             vehicleSources.size(),
@@ -224,6 +227,7 @@ DWORD WINAPI BackendThread(void*) {
             dialogueReplacementWasEnabled = dialogueReplacementIsEnabled;
         }
 
+        WaitForGameAudio();
         auto read = gRead.load(std::memory_order_relaxed);
         const auto write = gWrite.load(std::memory_order_acquire);
         if (!replacementIsEnabled &&
@@ -403,6 +407,7 @@ DWORD WINAPI BackendThread(void*) {
                 }
             }
         }
+        WaitForGameAudio();
         if (vehicleReplacementIsEnabled) {
             ContinueVehicleLoops(
                 activeLookupPath,
@@ -412,6 +417,7 @@ DWORD WINAPI BackendThread(void*) {
             );
         }
         CleanupVoices(voices);
+        WaitForGameAudio();
         if (replacementIsEnabled) {
             UpdateMinigunSources(
                 directSound,
@@ -441,6 +447,7 @@ DWORD WINAPI BackendThread(void*) {
                 virtualRuntimeSources
             );
         }
+        WaitForGameAudio();
         UpdateVoicePositions(voices);
         UpdateVoiceEnvironment(voices);
         if (dialogueReplacementIsEnabled) {
@@ -450,9 +457,12 @@ DWORD WINAPI BackendThread(void*) {
                 false
             );
         }
+        WaitForGameAudio();
         RebalanceVoiceMixer(voices);
         UpdateVoiceVolumeFades(voices);
+        WaitForGameAudio();
         UpdateVehicleStopFades(voices);
+        WaitForGameAudio();
         StartPendingVoices(voices);
     }
 
