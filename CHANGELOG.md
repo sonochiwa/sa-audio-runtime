@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.2
+
+- Fixed the game waiting for the runtime's sound work, which caused short
+  stutters when many car alarms or other vehicle sounds start and stop.
+- Improved frame times with many sounds playing: the game thread does less
+  audio work.
+
 ## 2.4.1
 
 - Fixed a crash after starting a new game or loading a save from the menu.
